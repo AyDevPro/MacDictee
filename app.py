@@ -284,7 +284,6 @@ def transcribe(audio: np.ndarray, words: bool = False) -> dict:
         res = mlx_whisper.transcribe(audio, **kwargs)
         mx.clear_cache()  # rend la mémoire de travail (jusqu'à ~700 Mo au pic) au lieu de la garder en réserve
         _last_use = time.monotonic()
-_cache_checked = False
     segs = []
     for s in res.get("segments", []):
         text = s["text"].strip()
