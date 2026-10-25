@@ -10,6 +10,7 @@ import datetime
 import difflib
 import json
 import os
+import platform
 import queue
 import re
 import subprocess
@@ -29,7 +30,7 @@ from ApplicationServices import (AXIsProcessTrusted, AXIsProcessTrustedWithOptio
                                  AXUIElementCreateApplication, AXUIElementIsAttributeSettable,
                                  AXUIElementSetAttributeValue)
 from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
-from Foundation import NSURL, NSFileManager
+from Foundation import NSURL, NSFileManager, NSUserDefaults
 from PyObjCTools.AppHelper import callAfter, callLater
 from ServiceManagement import SMAppService
 from Quartz import CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags, kCGEventFlagMaskCommand, kCGHIDEventTap
@@ -347,11 +348,26 @@ def press_paste() -> None:
         CGEventPost(kCGHIDEventTap, event)
 
 
+# macOS 14.2+ : « process tap » Core Audio, autorisation « sons du système uniquement » (comme Wispr Flow) ;
+# avant : ScreenCaptureKit, qui exige « Enregistrement de l'écran et des sons du système ».
+SYSTEM_AUDIO_TAP = tuple(int(x) for x in (platform.mac_ver()[0] or "0").split(".")[:2]) >= (14, 2)
+
+
+def fn_key_conflict() -> bool:
+    """La touche 🌐 ouvre les émojis (ou autre) : en mains libres, l'appui bref final ouvre le panneau,
+    qui prend le focus au moment où MacDictée cherche le champ de texte."""
+    if SETTINGS["hotkey"] != "fn":
+        return False
+    prefs = NSUserDefaults.alloc().initWithSuiteName_("com.apple.HIToolbox")
+    return int(prefs.integerForKey_("AppleFnUsageType")) != 0  # 0 = « Ne rien faire »
+
+
 def permissions():
     mic = AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio)  # 0 pas demandé, 3 accordé
     return {"micro": {0: "inconnu", 3: "ok"}.get(mic, "refusé"),
             "accessibility": "ok" if AXIsProcessTrusted() else "refusé",
-            "screen": "ok" if CGPreflightScreenCaptureAccess() else "refusé"}  # son du Mac (visios)
+            # son du Mac (visios) : l'autorisation « sons du système uniquement » n'a pas d'API de vérification
+            "screen": "tap" if SYSTEM_AUDIO_TAP else ("ok" if CGPreflightScreenCaptureAccess() else "refusé")}
 
 
 def login_item_enabled() -> bool:
@@ -414,11 +430,11 @@ def audio_helper() -> Path:
 class SystemAudio:
     """Son du Mac (visios…) lu en continu depuis macdictee-audio, distribué au rythme du micro."""
 
-    def __init__(self):
+    def __init__(self, *flags):
         helper = audio_helper()
         if not helper.exists():
             raise RuntimeError("module de capture du son du Mac absent")
-        self.proc = subprocess.Popen([str(helper)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        self.proc = subprocess.Popen([str(helper), *flags], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.PIPE)
         self.buf = bytearray()
         self.lock = threading.Lock()
@@ -698,6 +714,7 @@ class App(rumps.App):
             "login": login_item_enabled(),
             "version": APP_VERSION,
             "hotkeys": {k: v[2] for k, v in HOTKEYS.items()},
+            "fn_conflict": fn_key_conflict(),
             "update": self.update,
         }
 
@@ -881,8 +898,13 @@ class App(rumps.App):
         if action == "login":
             set_login_item(bool(args["value"]))
             return self.snapshot()
+        if action == "keyboard_settings":
+            subprocess.run(["open", "x-apple.systempreferences:com.apple.Keyboard-Settings.extension"])
+            return True
         if action == "privacy":
-            if args["what"] == "ScreenCapture" and not CGPreflightScreenCaptureAccess():
+            if args["what"] == "ScreenCapture" and SYSTEM_AUDIO_TAP:
+                args = {"what": "AudioCapture"}
+            elif args["what"] == "ScreenCapture" and not CGPreflightScreenCaptureAccess():
                 CGRequestScreenCaptureAccess()
             if args["what"] == "Microphone" and permissions()["micro"] == "inconnu":
                 AVCaptureDevice.requestAccessForMediaType_completionHandler_(AVMediaTypeAudio, lambda ok: self.push_state())
@@ -1051,7 +1073,7 @@ class App(rumps.App):
                 return
             system = None
             if SETTINGS["system_audio"]:
-                if not CGPreflightScreenCaptureAccess():
+                if not SYSTEM_AUDIO_TAP and not CGPreflightScreenCaptureAccess():
                     CGRequestScreenCaptureAccess()  # demande l'autorisation (une fois) ; on enregistre le micro seul
                     notify("MacDictée", "Son du Mac non capté",
                            "Autorisez « Enregistrement de l'écran et audio système » pour MacDictée, puis relancez-la.")
@@ -1059,7 +1081,12 @@ class App(rumps.App):
                     try:
                         system = SystemAudio()
                     except Exception as e:
-                        notify("MacDictée", "Son du Mac non capté", f"Micro seul : {e}"[:200])
+                        try:  # le tap Core Audio refuse : ScreenCaptureKit si son autorisation est déjà accordée
+                            if not (SYSTEM_AUDIO_TAP and CGPreflightScreenCaptureAccess()):
+                                raise
+                            system = SystemAudio("--screen")
+                        except Exception:
+                            notify("MacDictée", "Son du Mac non capté", f"Micro seul : {e}"[:200])
             self.long = LongRecording(system)
             self.long.start()
             self.toggle_item.title = "Arrêter l'enregistrement long"
@@ -1073,6 +1100,11 @@ class App(rumps.App):
     def _finish_long(self, rec):
         try:
             rec.stop()
+            system = speakers.system_path(rec.txt_path)
+            if rec.system and system.exists() and not np.any(speakers.load_wav(system)):
+                notify("MacDictée", "Aucun son du Mac capté",
+                       "Si une visio était en cours : Réglages Système > Confidentialité > « Enregistrement des sons "
+                       "du système uniquement » > MacDictée, puis relancez MacDictée.")
         finally:
             self.set_status("pret")
             self.window.emit("recordings", list_recordings(self.diarizing))

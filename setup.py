@@ -4,7 +4,7 @@ from setuptools import setup
 
 sys.setrecursionlimit(10000)  # l’analyse des imports de py2app est récursive (numpy, scipy, mlx…)
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 
 APP = ["app.py"]
 DATA_FILES = [("ui", ["ui/index.html"])]
@@ -21,6 +21,7 @@ OPTIONS = {
         "LSArchitecturePriority": ["arm64"],
         "LSUIElement": True,  # pas d'icône dans le Dock, seulement la barre de menus
         "NSMicrophoneUsageDescription": "MacDictée a besoin du micro pour transcrire votre voix.",
+        "NSAudioCaptureUsageDescription": "MacDictée enregistre le son du Mac pendant vos réunions en visio pour les transcrire.",
         "NSHumanReadableCopyright": "MacDictée : dictée vocale 100 % locale.",
     },
     "packages": ["mlx_whisper", "rumps", "sounddevice", "_sounddevice_data", "numpy", "scipy", "numba",
