@@ -6,6 +6,12 @@ Alternative maison, 100 % locale, à Wispr Flow (trop cher pour l'utilisateur : 
 Projet installé dans `~/Dev/MacDictee` (disque interne, venv Python 3.12) : l'app py2app en mode alias pointe vers ce dossier.
 Tout le code a été rédigé depuis un environnement Linux. Seuls la syntaxe et la logique pure d'apprentissage (`learn_from_edit`, `apply_rules`) ont été testées (avec des modules macOS simulés). **Premier objectif : lancer `python app.py` sur le Mac, corriger tout ce qui casse, puis vérifier chaque fonction ci-dessous à la main.**
 
+## Optimisation (0.6.0, mesurée)
+- **Modèle** : large-v3-turbo converti en **8 bits sur le Mac** au premier lancement (`ensure_model`, dans `~/Library/Application Support/MacDictee/modeles/whisper-large-v3-turbo-8bit`), puis le modèle complet est retiré du cache HF via `scan_cache_dir().delete_revisions` (blobs partagés : un simple rmtree du dossier du dépôt laisse 1,5 Go orphelin). Texte identique au modèle complet sur 4 tests ; mémoire 874 Mo au lieu de 1 618 ; disque 820 Mo au lieu de 1,5 Go. Le 4 bits (`-q4`) a été écarté : il casse les accents (« dictée » -> « DicT ») et hallucine.
+- `mx.clear_cache()` après chaque transcription (le pic de ~700 Mo n'est plus gardé en réserve) ; modèle déchargé après 10 min sans usage (`free_memory`, rechargé en ~1 s).
+- **`whisper_lite.py`** : DTW et filtre médian en numpy à la place de numba/llvmlite/scipy (horodatages de mots identiques sur la vraie réunion, 152/152) -> app 572 -> 369 Mo, DMG 288 -> 171 Mo, pas de LLVM en mémoire.
+- La fenêtre ne recalcule l'état que si elle est visible (`push_state`), rafraîchie à l'ouverture.
+
 ## Distribution
 - `./build.sh` : app autonome py2app (Python 3.12 + dépendances embarquées, ~570 Mo, DMG ~270 Mo) -> `dist/`. Signature ad hoc par défaut ; Developer ID + notarisation si `SIGN_ID` / `NOTARY_PROFILE` (chemin écrit mais jamais testé, pas de compte développeur pour l'instant).
 - Pièges py2app réglés dans `setup.py` / `build.sh` : limite de récursion, `mlx` et `tiktoken_ext` sont des namespace packages copiés après coup, torch/sympy exclus (jamais chargés pour transcrire), noms de fichiers ASCII (`MacDictee.app`, codesign casse sur le « é ») et nom affiché via `CFBundleDisplayName`.

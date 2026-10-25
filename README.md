@@ -76,7 +76,9 @@ La fenêtre *Ouvrir MacDictée…* (menu 🎙) montre l'état des autorisations,
 
 ## Réglages
 
-Variables d'environnement : `WHISPER_LANG` (`fr` par défaut, vide pour détection auto), `WHISPER_MODEL` (par défaut `mlx-community/whisper-large-v3-turbo`, mettre `mlx-community/whisper-small-mlx` pour plus de rapidité sur un vieux Mac).
+Variables d'environnement : `WHISPER_LANG` (`fr` par défaut, vide pour détection auto), `WHISPER_MODEL` (par défaut : whisper-large-v3-turbo converti en 8 bits au premier lancement ; mettre par exemple `mlx-community/whisper-small-mlx` pour plus de rapidité sur un vieux Mac).
+
+Sobriété : le modèle 8 bits occupe ~870 Mo de mémoire pendant l'utilisation et ~820 Mo sur le disque ; après 10 minutes sans dictée il est libéré (réglage *Libérer la mémoire au repos*), la dictée suivante prend alors ~1 seconde de plus.
 
 ## Test rapide sans construire l'app
 

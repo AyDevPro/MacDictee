@@ -87,6 +87,7 @@ class Window:
             self._build()
         self.window.makeKeyAndOrderFront_(None)
         NSApp.activateIgnoringOtherApps_(True)
+        self._js("window.refresh && refresh()")  # rattrape ce qui a changé pendant que la fenêtre était fermée
 
     def visible(self):
         return self.window is not None and self.window.isVisible()

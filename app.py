@@ -19,6 +19,12 @@ import time
 import wave
 from pathlib import Path
 
+import gc
+import shutil
+
+import whisper_lite  # noqa: F401  (avant mlx_whisper : remplace numba et scipy)
+import mlx.core as mx
+import mlx.nn as nn
 import mlx_whisper
 import objc
 import numpy as np
@@ -41,7 +47,11 @@ from overlay import Overlay
 from ui import Window, install_edit_menu
 
 SR = 16000
-MODEL = os.environ.get("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
+# Whisper large-v3-turbo converti en 8 bits sur le Mac : texte identique au modèle complet sur nos tests
+# (accents compris, contrairement au 4 bits), 874 Mo de mémoire au lieu de 1,6 Go, 864 Mo sur le disque.
+MODEL_SOURCE = "mlx-community/whisper-large-v3-turbo"
+MODEL = os.environ.get("WHISPER_MODEL") or str(speakers.MODELS_DIR / "whisper-large-v3-turbo-8bit")
+IDLE_UNLOAD = 10 * 60  # sans dictée ni réunion pendant ce temps, on libère la mémoire du modèle
 # Touche à maintenir pour dicter : (keyCode, masque « device-dependent » de la touche, libellé).
 # Écoutée via NSEvent : pynput appelait des API clavier hors du thread principal et macOS tuait l'app.
 HOTKEYS = {
@@ -84,6 +94,7 @@ DEFAULT_SETTINGS = {
     "overlay": True,  # pastille en bas de l'écran pendant la dictée
     "handsfree": True,  # double appui = dictée continue jusqu'au prochain appui
     "system_audio": True,  # réunions : enregistrer aussi le son du Mac (visios), sur une piste à part
+    "free_memory": True,  # décharger le modèle après IDLE_UNLOAD sans utilisation (rechargé en ~1 s)
 }
 
 
@@ -199,6 +210,58 @@ def vocab_prompt():
     return prompt[-600:] or None  # Whisper limite la taille du prompt : on garde les plus récents
 
 
+def ensure_model():
+    """Prépare le modèle 8 bits une fois pour toutes : téléchargement du modèle complet, conversion, puis
+    suppression du modèle complet (1,5 Go libérés). Appelé sous _model_lock."""
+    target = Path(MODEL)
+    if os.environ.get("WHISPER_MODEL") or (target / "weights.safetensors").exists():
+        return
+    from huggingface_hub import snapshot_download
+    from mlx.utils import tree_flatten
+    from mlx_whisper.load_models import load_model
+
+    source = Path(snapshot_download(MODEL_SOURCE))
+    model = load_model(str(source), dtype=mx.float16)
+    nn.quantize(model, group_size=64, bits=8)
+    config = json.loads((source / "config.json").read_text())
+    config["quantization"] = {"group_size": 64, "bits": 8}
+    tmp = target.with_name(target.name + ".tmp")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    (tmp / "config.json").write_text(json.dumps(config))
+    mx.save_safetensors(str(tmp / "weights.safetensors"), dict(tree_flatten(model.parameters())))
+    tmp.rename(target)
+    del model
+    drop_cached_model(MODEL_SOURCE)
+
+
+def drop_cached_model(repo_id):
+    """Supprime un modèle du cache Hugging Face, fichiers de poids compris (ils sont dans un dossier partagé)."""
+    from huggingface_hub import scan_cache_dir
+    try:
+        cache = scan_cache_dir()
+        revisions = [r.commit_hash for repo in cache.repos if repo.repo_id == repo_id for r in repo.revisions]
+        if revisions:
+            cache.delete_revisions(*revisions).execute()
+    except Exception:
+        pass  # le cache n'est qu'une économie de place : on ne bloque jamais la dictée pour ça
+
+
+_last_use = time.monotonic()
+
+
+def unload_model():
+    """Libère la mémoire du modèle (rechargé automatiquement à la prochaine transcription)."""
+    with _model_lock:
+        holder = mlx_whisper.transcribe.__globals__["ModelHolder"]
+        if holder.model is None:
+            return False
+        holder.model = holder.model_path = None
+        gc.collect()
+        mx.clear_cache()
+        return True
+
+
 def transcribe(audio: np.ndarray, words: bool = False) -> dict:
     """words=True : horodatage de chaque mot (réunions, pour attribuer chaque mot au bon intervenant)."""
     kwargs = dict(path_or_hf_repo=MODEL, condition_on_previous_text=False, word_timestamps=words,
@@ -208,8 +271,12 @@ def transcribe(audio: np.ndarray, words: bool = False) -> dict:
     prompt = vocab_prompt()
     if prompt:
         kwargs["initial_prompt"] = prompt
+    global _last_use
     with _model_lock:
+        ensure_model()
         res = mlx_whisper.transcribe(audio, **kwargs)
+        mx.clear_cache()  # rend la mémoire de travail (jusqu'à ~700 Mo au pic) au lieu de la garder en réserve
+        _last_use = time.monotonic()
     segs = []
     for s in res.get("segments", []):
         text = s["text"].strip()
@@ -685,6 +752,11 @@ class App(rumps.App):
         transcribe(np.zeros(SR, dtype="float32"))  # la 1re dictée est ensuite instantanée
         self.model_ready = True
         self.push_state()
+        while True:  # libère le modèle quand on ne s'en sert plus (une vérification par minute, rien d'autre)
+            time.sleep(60)
+            idle = time.monotonic() - _last_use > IDLE_UNLOAD
+            if SETTINGS["free_memory"] and idle and not self.dictating and self.long is None and not self.diarizing:
+                unload_model()
 
     # --- état partagé avec la fenêtre
     def set_status(self, status):
@@ -704,7 +776,7 @@ class App(rumps.App):
         return {
             "status": self.status,
             "model_ready": self.model_ready,
-            "model": MODEL,
+            "model": os.environ.get("WHISPER_MODEL") or "whisper-large-v3-turbo · 8 bits",
             "permissions": permissions(),
             "settings": SETTINGS,
             "long": {"since": self.long.started.isoformat(timespec="seconds"), "txt": str(self.long.txt_path)}
@@ -783,7 +855,8 @@ class App(rumps.App):
         callAfter(rumps.quit_application)  # l'ancienne version doit être fermée pour être remplacée
 
     def push_state(self):
-        self.window.emit("state", self.snapshot())
+        if self.window.visible():  # fenêtre fermée : rien à calculer (elle se met à jour en s'ouvrant)
+            self.window.emit("state", self.snapshot())
 
     def apply_dock(self):
         # LSUIElement démarre l'app sans Dock ; on l'y ajoute si le réglage le demande
@@ -1161,6 +1234,8 @@ def self_test(wav_path):
     with wave.open(wav_path) as w:
         audio = np.frombuffer(w.readframes(w.getnframes()), dtype="int16").astype("float32") / 32768.0
     print("SELFTEST:", transcribe(audio)["text"], flush=True)
+    words = [w for seg in transcribe(audio, words=True)["segments"] for w in seg.get("words", [])]
+    print("SELFTEST mots horodatés :", len(words), "| premier :", words[0]["word"].strip(), round(float(words[0]["start"]), 2), flush=True)
     speakers.ensure_models()
     print("SELFTEST intervenants :", len({s for _, _, s in speakers.diarize(audio)}), flush=True)
     try:
