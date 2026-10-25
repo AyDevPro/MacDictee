@@ -2,7 +2,24 @@
 
 Dictée vocale et transcription longue durée pour Mac, 100 % locale (aucune donnée envoyée sur internet une fois le modèle téléchargé). Nécessite un Mac Apple Silicon (M1 ou plus récent).
 
-## Installation
+## Installer (utilisateurs)
+
+1. Ouvrez `MacDictee-x.y.z.dmg` et glissez **MacDictée** dans **Applications**.
+2. Premier lancement : l'app n'est pas encore signée par Apple, macOS la bloque. Allez dans **Réglages Système > Confidentialité et sécurité**, tout en bas, et cliquez sur **Ouvrir quand même**.
+3. La fenêtre MacDictée s'ouvre et vous guide pour les autorisations (Microphone, Accessibilité). Le modèle Whisper (~1,5 Go) se télécharge à la première utilisation ; tout reste ensuite sur le Mac.
+
+Nécessite un Mac Apple Silicon (M1 ou plus récent), macOS 13 ou plus récent.
+
+## Construire le DMG (développeurs)
+
+```bash
+./install.sh   # une fois : crée l'environnement Python 3.12
+./build.sh     # -> dist/MacDictee-x.y.z.dmg (app autonome, Python inclus)
+```
+
+Version : `VERSION` dans `setup.py`. Sans compte développeur Apple, l'app est signée « ad hoc » : chaque nouvelle version oblige à redonner l'autorisation Accessibilité. Avec un compte (99 $/an), `SIGN_ID="Developer ID Application: …" NOTARY_PROFILE=… ./build.sh` signe et notarise (plus d'avertissement au premier lancement, autorisations conservées entre les versions). L'identification des locuteurs (pyannote/torch) n'est pas incluse dans l'app autonome.
+
+## Installation en mode développement
 
 ```bash
 cd ~/Dev/MacDictee   # sur le disque interne : l'app pointe vers ce dossier

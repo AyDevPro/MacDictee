@@ -4,6 +4,7 @@ Le JavaScript appelle Python via `window.webkit.messageHandlers.md.postMessage(j
 Python répond avec `md._reply(id, ok, data)` et pousse des événements avec `md.onEvent(nom, data)`.
 """
 import json
+import os
 from pathlib import Path
 
 import objc
@@ -14,7 +15,10 @@ from Foundation import NSURL, NSObject
 from PyObjCTools.AppHelper import callAfter
 from WebKit import WKUserContentController, WKWebView, WKWebViewConfiguration
 
-UI_DIR = Path(__file__).resolve().parent / "ui"
+# app autonome (py2app) : ui/ est copié dans Contents/Resources ; sinon, à côté de ce fichier
+UI_DIR = Path(os.environ.get("RESOURCEPATH", Path(__file__).resolve().parent)) / "ui"
+if not UI_DIR.exists():
+    UI_DIR = Path(__file__).resolve().parent / "ui"
 
 
 class _MessageHandler(NSObject, protocols=[objc.protocolNamed("WKScriptMessageHandler")]):

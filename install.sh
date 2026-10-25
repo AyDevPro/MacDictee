@@ -25,7 +25,7 @@ fi
 python setup.py py2app -A
 rm -rf "$HOME/Applications/MacDictée.app"
 mkdir -p "$HOME/Applications"
-cp -R dist/MacDictée.app "$HOME/Applications/"
+cp -R dist/MacDictee.app "$HOME/Applications/MacDictée.app"
 
 echo ""
 echo "✅ Installé dans ~/Applications/MacDictée.app"

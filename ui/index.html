@@ -186,6 +186,10 @@ tr:last-child td { border-bottom: 0; }
         <div class="grow"><b>Remettre le presse-papiers après collage</b><div class="muted small">Ce que vous aviez copié avant la dictée est restauré.</div></div>
         <label class="switch"><input type="checkbox" data-setting="restore_clipboard"><span></span></label>
       </div>
+      <div class="row" id="login-row">
+        <div class="grow"><b>Ouvrir au démarrage du Mac</b><div class="muted small">MacDictée se lance tout seul quand vous ouvrez votre session.</div></div>
+        <label class="switch"><input type="checkbox" id="login-toggle"><span></span></label>
+      </div>
       <div class="row">
         <div class="grow"><b>Langue</b><div class="muted small">« Automatique » détecte la langue, mais un peu moins fiable sur les phrases courtes.</div></div>
         <select data-setting="language">
@@ -198,6 +202,7 @@ tr:last-child td { border-bottom: 0; }
     <h2>Informations</h2>
     <div class="card">
       <div class="row"><div class="grow">Raccourci</div><kbd>⌥ Option droite</kbd> <span class="muted small">(maintenir)</span></div>
+      <div class="row"><div class="grow">Version</div><span class="muted small" id="info-version"></span></div>
       <div class="row"><div class="grow">Modèle</div><span class="muted small" id="info-model"></span></div>
       <div class="row"><div class="grow">Dossier</div><span class="muted small" id="info-dir"></span><button class="btn" data-action="open_folder">Ouvrir</button></div>
     </div>
@@ -303,6 +308,9 @@ function renderState(s) {
     const v = s.settings[el.dataset.setting];
     el.type === "checkbox" ? (el.checked = !!v) : (el.value = v);
   });
+  $("#login-toggle").checked = !!s.login;
+  $("#login-row").style.display = s.can_restart ? "" : "none";
+  $("#info-version").textContent = s.version;
   $("#info-model").textContent = s.model.replace("mlx-community/", "");
   $("#info-dir").textContent = s.out_dir.replace(/^\/Users\/[^/]+/, "~");
 }
@@ -314,6 +322,11 @@ document.querySelectorAll("[data-setting]").forEach((el) => el.addEventListener(
   renderState(await md.call("setting", { key: el.dataset.setting, value }));
   toast("Réglage enregistré");
 }));
+
+$("#login-toggle").addEventListener("change", async (e) => {
+  try { renderState(await md.call("login", { value: e.target.checked })); toast("Réglage enregistré"); }
+  catch { e.target.checked = !e.target.checked; }
+});
 
 // ---- historique
 let history = [];

@@ -5,6 +5,7 @@ numpy
 pyobjc-framework-Quartz
 pyobjc-framework-WebKit
 pyobjc-framework-AVFoundation
+pyobjc-framework-ServiceManagement
 pyobjc-framework-Cocoa
 pyobjc-framework-ApplicationServices
 py2app

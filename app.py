@@ -22,12 +22,14 @@ import mlx_whisper
 import numpy as np
 import rumps
 import sounddevice as sd
-from AppKit import NSBundle, NSEvent, NSEventMaskFlagsChanged, NSPasteboard, NSPasteboardItem, NSWorkspace
+from AppKit import (NSBundle, NSEvent, NSEventMaskFlagsChanged, NSPasteboard, NSPasteboardItem,
+                    NSPasteboardTypeString, NSWorkspace)
 from ApplicationServices import (AXIsProcessTrusted, AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue,
                                  AXUIElementCreateApplication, AXUIElementIsAttributeSettable,
                                  AXUIElementSetAttributeValue)
 from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
 from PyObjCTools.AppHelper import callAfter
+from ServiceManagement import SMAppService
 from Quartz import CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags, kCGEventFlagMaskCommand, kCGHIDEventTap
 
 from ui import Window
@@ -272,7 +274,10 @@ def play(name):
 
 
 def set_clipboard(text: str) -> None:
-    subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=False)
+    # pas de pbcopy : lancé depuis le Finder (sans LANG), il lit l'UTF-8 comme du Mac Roman et casse les accents
+    pb = NSPasteboard.generalPasteboard()
+    pb.clearContents()
+    pb.setString_forType_(text, NSPasteboardTypeString)
 
 
 def save_clipboard():
@@ -311,6 +316,17 @@ def permissions():
     mic = AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio)  # 0 pas demandé, 3 accordé
     return {"micro": {0: "inconnu", 3: "ok"}.get(mic, "refusé"),
             "accessibility": "ok" if AXIsProcessTrusted() else "refusé"}
+
+
+def login_item_enabled() -> bool:
+    return SMAppService.mainAppService().status() == 1  # SMAppServiceStatusEnabled
+
+
+def set_login_item(enabled: bool) -> None:
+    service = SMAppService.mainAppService()
+    ok, err = (service.registerAndReturnError_ if enabled else service.unregisterAndReturnError_)(None)
+    if not ok:
+        raise RuntimeError(str(err.localizedDescription()) if err else "Impossible de modifier l'ouverture au démarrage")
 
 
 PRIVACY_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_"
@@ -533,6 +549,8 @@ class App(rumps.App):
                     if self.long else None,
             "out_dir": str(OUT_DIR),
             "can_restart": bundle.endswith(".app"),
+            "login": login_item_enabled(),
+            "version": str(NSBundle.mainBundle().objectForInfoDictionaryKey_("CFBundleShortVersionString") or "dev"),
         }
 
     def push_state(self):
@@ -602,6 +620,9 @@ class App(rumps.App):
             SETTINGS[args["key"]] = args["value"]
             save_settings()
             self.sync_menu()
+            return self.snapshot()
+        if action == "login":
+            set_login_item(bool(args["value"]))
             return self.snapshot()
         if action == "privacy":
             if args["what"] == "Microphone" and permissions()["micro"] == "inconnu":
@@ -746,5 +767,16 @@ class App(rumps.App):
             self.window.emit("recordings", list_recordings())
 
 
+def self_test(wav_path):
+    """MACDICTEE_SELFTEST=fichier.wav : vérifie qu'une app construite sait transcrire, sans interface."""
+    import sys
+    with wave.open(wav_path) as w:
+        audio = np.frombuffer(w.readframes(w.getnframes()), dtype="int16").astype("float32") / 32768.0
+    print("SELFTEST:", transcribe(audio)["text"], flush=True)
+    sys.exit(0)
+
+
 if __name__ == "__main__":
+    if os.environ.get("MACDICTEE_SELFTEST"):
+        self_test(os.environ["MACDICTEE_SELFTEST"])
     App().run()

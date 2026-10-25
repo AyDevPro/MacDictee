@@ -6,8 +6,17 @@ Alternative maison, 100 % locale, à Wispr Flow (trop cher pour l'utilisateur : 
 Projet installé dans `~/Dev/MacDictee` (disque interne, venv Python 3.12) : l'app py2app en mode alias pointe vers ce dossier.
 Tout le code a été rédigé depuis un environnement Linux. Seuls la syntaxe et la logique pure d'apprentissage (`learn_from_edit`, `apply_rules`) ont été testées (avec des modules macOS simulés). **Premier objectif : lancer `python app.py` sur le Mac, corriger tout ce qui casse, puis vérifier chaque fonction ci-dessous à la main.**
 
+## Distribution
+- `./build.sh` : app autonome py2app (Python 3.12 + dépendances embarquées, ~570 Mo, DMG ~270 Mo) -> `dist/`. Signature ad hoc par défaut ; Developer ID + notarisation si `SIGN_ID` / `NOTARY_PROFILE` (chemin écrit mais jamais testé, pas de compte développeur pour l'instant).
+- Pièges py2app réglés dans `setup.py` / `build.sh` : limite de récursion, `mlx` et `tiktoken_ext` sont des namespace packages copiés après coup, torch/sympy exclus (jamais chargés pour transcrire), noms de fichiers ASCII (`MacDictee.app`, codesign casse sur le « é ») et nom affiché via `CFBundleDisplayName`.
+- `MACDICTEE_SELFTEST=fichier.wav dist/MacDictee.app/Contents/MacOS/MacDictee` : vérifie qu'une app construite transcrit, sans interface.
+- Icône : `tools/make_icon.py` -> `assets/MacDictee.icns`.
+- `install.sh` reste le mode développement (py2app alias pointant vers le venv).
+
 ## Ce qui existe (`app.py`)
 - **Fenêtre** (`ui.py` + `ui/index.html`) : WKWebView, pont JS -> `App.handle(action, args)`, événements Python -> `md.onEvent`. Réglages persistants dans `~/Transcriptions/reglages.json`, historique dans `historique.json`.
+- Presse-papiers écrit via `NSPasteboard` (pas `pbcopy` : sans `LANG`, lancé depuis le Finder, il cassait les accents).
+- Option « Ouvrir au démarrage » via `SMAppService`.
 - **Dictée** : touche Option droite maintenue (moniteur `NSEvent` sur le thread principal ; pynput retiré car il plantait l'app sous macOS 27 en appelant TSM hors du thread principal) -> enregistrement -> transcription (mlx-whisper, `whisper-large-v3-turbo`) -> collage via Cmd+V.
 - **Champ actif** : détection via l'API Accessibilité (`AXFocusedUIElement`, rôle / `AXValue` modifiable / `AXSelectedTextRange`). Si aucun champ de texte : on copie seulement dans le presse-papiers + notification. Après un collage, l'ancien presse-papiers est restauré (option de menu) ; sans collage, le texte reste dans le presse-papiers. Les mises à jour d'interface depuis les threads passent par `notify()` / `set_title()` (thread principal via `callAfter`). `AXManualAccessibility` est activé pour Chrome/Electron.
 - **Enregistrement long** : WAV écrit en continu dans `~/Transcriptions`, transcription par blocs de 20 à 45 s coupés sur les silences (RMS), fichier `.txt` horodaté au fil de l'eau.
