@@ -4,7 +4,7 @@ from setuptools import setup
 
 sys.setrecursionlimit(10000)  # l’analyse des imports de py2app est récursive (numpy, scipy, mlx…)
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 
 APP = ["app.py"]
 DATA_FILES = [("ui", ["ui/index.html"])]
@@ -26,7 +26,7 @@ OPTIONS = {
     "packages": ["mlx_whisper", "rumps", "sounddevice", "_sounddevice_data", "numpy", "scipy", "numba",
                  "llvmlite", "tiktoken", "huggingface_hub", "certifi", "tqdm",
                  "AppKit", "ApplicationServices", "Quartz", "WebKit", "AVFoundation", "ServiceManagement"],
-    "includes": ["ui"],
+    "includes": ["ui", "updates"],
     # torch n'est jamais chargé pour transcrire (seulement pour convertir des modèles) : ~600 Mo économisés.
     # pyannote (locuteurs) dépend de torch : il n'est disponible qu'en lançant depuis les sources.
     # mlx et tiktoken_ext sont des « namespace packages » que py2app ne sait pas collecter : build.sh les copie.

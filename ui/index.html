@@ -100,6 +100,10 @@ tr:last-child td { border-bottom: 0; }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(20px); opacity: 0; background: var(--text); color: var(--bg); padding: 7px 14px; border-radius: 8px; transition: .2s; pointer-events: none; }
 .toast.show { opacity: 1; transform: translateX(-50%); }
 .alert { background: var(--amber-soft); color: var(--text); border-color: transparent; }
+.update { background: var(--accent-soft); border-color: transparent; margin-bottom: 14px; }
+.update .notes { white-space: pre-wrap; margin-top: 6px; max-height: 110px; overflow-y: auto; }
+.bar { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 10px; }
+.bar > div { height: 100%; background: var(--accent); transition: width .2s; }
 </style>
 </head>
 <body>
@@ -115,6 +119,7 @@ tr:last-child td { border-bottom: 0; }
 <main>
   <!-- ACCUEIL -->
   <section id="accueil" class="active">
+    <div id="update-banner"></div>
     <h1>Bonjour 👋</h1>
     <p class="sub">Maintenez <kbd>⌥ Option droite</kbd>, parlez, relâchez. Le texte est collé là où se trouve votre curseur.</p>
     <div class="card hero">
@@ -206,7 +211,8 @@ tr:last-child td { border-bottom: 0; }
     <h2>Informations</h2>
     <div class="card">
       <div class="row"><div class="grow">Raccourci</div><kbd>⌥ Option droite</kbd> <span class="muted small">(maintenir)</span></div>
-      <div class="row"><div class="grow">Version</div><span class="muted small" id="info-version"></span></div>
+      <div class="row"><div class="grow">Version</div><span class="muted small" id="info-version"></span>
+        <button class="btn" id="update-check">Rechercher des mises à jour</button></div>
       <div class="row"><div class="grow">Modèle</div><span class="muted small" id="info-model"></span></div>
       <div class="row"><div class="grow">Dossier</div><span class="muted small" id="info-dir"></span><button class="btn" data-action="open_folder">Ouvrir</button></div>
     </div>
@@ -237,6 +243,7 @@ const md = {
     if (name === "state") renderState(data);
     if (name === "history") renderHistory(data);
     if (name === "recordings") renderRecordings(data);
+    if (name === "update_checked") updateChecked(data);
   },
 };
 window.md = md;
@@ -312,6 +319,7 @@ function renderState(s) {
     const v = s.settings[el.dataset.setting];
     el.type === "checkbox" ? (el.checked = !!v) : (el.value = v);
   });
+  renderUpdate(s.update);
   $("#login-toggle").checked = !!s.login;
   $("#login-row").style.display = s.can_restart ? "" : "none";
   $("#info-version").textContent = s.version;
@@ -331,6 +339,35 @@ $("#login-toggle").addEventListener("change", async (e) => {
   try { renderState(await md.call("login", { value: e.target.checked })); toast("Réglage enregistré"); }
   catch { e.target.checked = !e.target.checked; }
 });
+
+// ---- mises à jour
+function renderUpdate(u) {
+  $("#badge-update")?.remove();
+  if (!u) { $("#update-banner").innerHTML = ""; return; }
+  const mb = u.size ? ` · ${Math.round(u.size / 1e6)} Mo` : "";
+  const busy = u.progress !== null && u.progress !== undefined;
+  $("#update-banner").innerHTML = `<div class="card update">
+    <div class="row"><div class="grow"><b>🎉 MacDictée ${esc(u.version)} est disponible</b>
+      <div class="muted small">Vous avez la version ${esc(state.version)}${mb}</div></div>
+      ${busy ? "" : `<button class="btn" onclick="md.call('open_url',{url:'${esc(u.page)}'})">Détails</button>
+      <button class="btn primary" onclick="md.call('update_install')">Mettre à jour</button>`}</div>
+    ${u.notes && !busy ? `<div class="notes small">${esc(u.notes)}</div>` : ""}
+    ${busy ? `<div class="small muted" style="margin-top:8px">${u.progress >= 1
+      ? "Téléchargé ! Glissez MacDictée dans Applications (Remplacer), puis rouvrez-la."
+      : "Téléchargement… " + Math.round(u.progress * 100) + " %"}</div>
+      <div class="bar"><div style="width:${Math.round(u.progress * 100)}%"></div></div>` : ""}</div>`;
+  document.querySelector('nav button[data-tab="accueil"]').insertAdjacentHTML("beforeend", '<span class="badge" id="badge-update">●</span>');
+}
+$("#update-check").addEventListener("click", (e) => {
+  e.target.disabled = true; e.target.textContent = "Recherche…";
+  md.call("update_check");
+});
+function updateChecked(r) {
+  const b = $("#update-check"); b.disabled = false; b.textContent = "Rechercher des mises à jour";
+  if (r.error) toast("Impossible de vérifier : " + r.error);
+  else if (r.found) { toast("Nouvelle version disponible !"); showTab("accueil"); }
+  else toast("MacDictée est à jour ✓");
+}
 
 // ---- historique
 let history = [];

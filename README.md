@@ -19,6 +19,17 @@ Nécessite un Mac Apple Silicon (M1 ou plus récent), macOS 13 ou plus récent.
 
 Version : `VERSION` dans `setup.py`. Sans compte développeur Apple, l'app est signée « ad hoc » : chaque nouvelle version oblige à redonner l'autorisation Accessibilité. Avec un compte (99 $/an), `SIGN_ID="Developer ID Application: …" NOTARY_PROFILE=… ./build.sh` signe et notarise (plus d'avertissement au premier lancement, autorisations conservées entre les versions). L'identification des locuteurs (pyannote/torch) n'est pas incluse dans l'app autonome.
 
+## Mises à jour
+
+Les apps installées vérifient au lancement, puis toutes les 6 heures, s'il existe une version plus récente sur [GitHub Releases](https://github.com/AyDevPro/MacDictee/releases). Si oui : notification, entrée « ⬆️ Installer la version… » dans le menu 🎙, et bandeau « Mettre à jour » dans la fenêtre. Le DMG se télécharge dans `~/Downloads`, s'ouvre, l'app se ferme : il reste à glisser MacDictée dans Applications (Remplacer) et à la rouvrir. Sans signature Apple, l'autorisation Accessibilité est à redonner après chaque mise à jour.
+
+Publier une version (développeurs) :
+
+```bash
+# 1. augmenter VERSION dans setup.py, puis commiter
+./release.sh "Ce qui change dans cette version"
+```
+
 ## Installation en mode développement
 
 ```bash

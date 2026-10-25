@@ -10,6 +10,7 @@ Tout le code a été rédigé depuis un environnement Linux. Seuls la syntaxe et
 - `./build.sh` : app autonome py2app (Python 3.12 + dépendances embarquées, ~570 Mo, DMG ~270 Mo) -> `dist/`. Signature ad hoc par défaut ; Developer ID + notarisation si `SIGN_ID` / `NOTARY_PROFILE` (chemin écrit mais jamais testé, pas de compte développeur pour l'instant).
 - Pièges py2app réglés dans `setup.py` / `build.sh` : limite de récursion, `mlx` et `tiktoken_ext` sont des namespace packages copiés après coup, torch/sympy exclus (jamais chargés pour transcrire), noms de fichiers ASCII (`MacDictee.app`, codesign casse sur le « é ») et nom affiché via `CFBundleDisplayName`.
 - `MACDICTEE_SELFTEST=fichier.wav dist/MacDictee.app/Contents/MacOS/MacDictee` : vérifie qu'une app construite transcrit, sans interface.
+- Mises à jour : `updates.py` interroge `api.github.com/repos/AyDevPro/MacDictee/releases/latest` (dépôt public), certificats via `certifi` (le Python embarqué n'a pas ceux de Homebrew). `./release.sh "notes"` : build + tag `vX.Y.Z` + `gh release create` avec le DMG. Version = `VERSION` dans `setup.py` (`APP_VERSION` le lit aussi en mode sources).
 - Icône : `tools/make_icon.py` -> `assets/MacDictee.icns`.
 - `install.sh` reste le mode développement (py2app alias pointant vers le venv).
 

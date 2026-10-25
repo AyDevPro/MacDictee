@@ -33,6 +33,7 @@ from PyObjCTools.AppHelper import callAfter
 from ServiceManagement import SMAppService
 from Quartz import CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags, kCGEventFlagMaskCommand, kCGHIDEventTap
 
+import updates
 from ui import Window, install_edit_menu
 
 SR = 16000
@@ -44,6 +45,20 @@ HOTKEY_FLAG = 0x40  # NX_DEVICERALTKEYMASK : Option droite enfoncée
 V_KEYCODE = 9
 OUT_DIR = Path.home() / "Transcriptions"
 OUT_DIR.mkdir(exist_ok=True)
+
+
+
+def app_version() -> str:
+    bundle = NSBundle.mainBundle()
+    if bundle.bundleIdentifier() == "fr.local.macdictee":
+        return str(bundle.objectForInfoDictionaryKey_("CFBundleShortVersionString"))
+    setup_py = Path(__file__).resolve().parent / "setup.py"  # lancé depuis les sources
+    m = re.search(r'VERSION = "(.+)"', setup_py.read_text()) if setup_py.exists() else None
+    return m[1] if m else "0"
+
+
+APP_VERSION = app_version()
+UPDATE_EVERY = 6 * 3600
 
 SETTINGS_FILE = OUT_DIR / "reglages.json"
 DEFAULT_SETTINGS = {
@@ -511,7 +526,10 @@ class App(rumps.App):
         self.status = "pret"
         self.model_ready = False
         self._monitors = []
+        self.update = None  # dernière version disponible (dict de updates.latest_release) si plus récente
+        self.update_item = None
         rumps.events.before_start.register(self._on_start)
+        threading.Thread(target=self._update_loop, daemon=True).start()
         threading.Thread(target=self._warm_up, daemon=True).start()
 
     def _on_start(self):
@@ -554,8 +572,73 @@ class App(rumps.App):
             "out_dir": str(OUT_DIR),
             "can_restart": bundle.endswith(".app"),
             "login": login_item_enabled(),
-            "version": str(NSBundle.mainBundle().objectForInfoDictionaryKey_("CFBundleShortVersionString") or "dev"),
+            "version": APP_VERSION,
+            "update": self.update,
         }
+
+    # --- mises à jour
+    def _update_loop(self):
+        time.sleep(10)
+        while True:
+            try:
+                self.check_update()
+            except Exception:
+                pass  # hors ligne, GitHub indisponible… on réessaiera
+            time.sleep(UPDATE_EVERY)
+
+    def check_update(self):
+        release = updates.latest_release()
+        if not updates.is_newer(release, APP_VERSION):
+            return False
+        first = self.update is None or self.update["version"] != release["version"]
+        self.update = {**release, "progress": None}
+        if first:
+            notify("MacDictée", f"Nouvelle version {release['version']} disponible",
+                   "Ouvrez MacDictée pour la télécharger.")
+            callAfter(self._add_update_item)
+        self.push_state()
+        return True
+
+    def _add_update_item(self):
+        title = f"⬆️ Installer la version {self.update['version']}…"
+        if self.update_item is None:
+            self.update_item = rumps.MenuItem(title, callback=lambda _: self.window.show())
+            self.menu.insert_before("Ouvrir MacDictée…", self.update_item)
+        else:
+            self.update_item.title = title
+
+    def install_update(self):
+        if self.update is None or self.update["progress"] is not None:
+            return
+        self.update["progress"] = 0.0
+        self.push_state()
+        threading.Thread(target=self._download_update, daemon=True).start()
+
+    def _download_update(self):
+        release = self.update
+        dest = Path.home() / "Downloads" / f"MacDictee-{release['version']}.dmg"
+        last = [0.0]
+
+        def progress(fraction):
+            if fraction - last[0] >= 0.02:  # pas plus d'un rafraîchissement par 2 %
+                last[0] = fraction
+                release["progress"] = fraction
+                self.push_state()
+
+        try:
+            updates.download(release["dmg"], dest, progress)
+        except Exception as e:
+            release["progress"] = None
+            self.push_state()
+            notify("MacDictée", "Téléchargement impossible", str(e)[:200])
+            return
+        release["progress"] = 1.0
+        self.push_state()
+        subprocess.run(["open", str(dest)])  # ouvre le DMG : il n'y a plus qu'à glisser l'app dans Applications
+        notify("MacDictée", "Mise à jour téléchargée",
+               "Glissez MacDictée dans Applications (Remplacer), puis rouvrez-la.")
+        time.sleep(2)
+        callAfter(rumps.quit_application)  # l'ancienne version doit être fermée pour être remplacée
 
     def push_state(self):
         self.window.emit("state", self.snapshot())
@@ -633,6 +716,22 @@ class App(rumps.App):
                 self.apply_dock()
                 self.window.show()  # repasser en mode Dock fait perdre le premier plan à la fenêtre
             return self.snapshot()
+        if action == "update_check":  # réseau : en arrière-plan, la réponse arrive par l'événement "update_checked"
+            def run():
+                try:
+                    self.window.emit("update_checked", {"found": self.check_update()})
+                except Exception as e:
+                    self.window.emit("update_checked", {"error": str(e)})
+            threading.Thread(target=run, daemon=True).start()
+            return True
+        if action == "update_install":
+            self.install_update()
+            return self.snapshot()
+        if action == "open_url":
+            if not args["url"].startswith(f"https://github.com/{updates.REPO}/"):
+                raise ValueError("Lien non autorisé")
+            subprocess.run(["open", args["url"]])
+            return True
         if action == "login":
             set_login_item(bool(args["value"]))
             return self.snapshot()
@@ -796,6 +895,10 @@ def self_test(wav_path):
     with wave.open(wav_path) as w:
         audio = np.frombuffer(w.readframes(w.getnframes()), dtype="int16").astype("float32") / 32768.0
     print("SELFTEST:", transcribe(audio)["text"], flush=True)
+    try:
+        print("SELFTEST mise à jour :", APP_VERSION, "->", updates.latest_release()["version"], flush=True)
+    except Exception as e:  # pas encore de version publiée, hors ligne…
+        print("SELFTEST mise à jour :", type(e).__name__, e, flush=True)
     sys.exit(0)
 
 
