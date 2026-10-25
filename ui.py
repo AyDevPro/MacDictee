@@ -39,6 +39,7 @@ def install_edit_menu():
     main.addItem_(app_item)
     app_menu = NSMenu.alloc().initWithTitle_("MacDictée")
     app_menu.addItemWithTitle_action_keyEquivalent_("Fermer la fenêtre", "performClose:", "w")
+    app_menu.addItemWithTitle_action_keyEquivalent_("Quitter MacDictée", "terminate:", "q")
     app_item.setSubmenu_(app_menu)
     edit_item = NSMenuItem.alloc().init()
     main.addItem_(edit_item)
@@ -58,7 +59,6 @@ class Window:
         self.webview = None
 
     def _build(self):
-        install_edit_menu()
         config = WKWebViewConfiguration.alloc().init()
         controller = WKUserContentController.alloc().init()
         self._handler = _MessageHandler.alloc().initWithCallback_(self._on_message)

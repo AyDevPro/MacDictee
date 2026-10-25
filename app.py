@@ -19,10 +19,11 @@ import wave
 from pathlib import Path
 
 import mlx_whisper
+import objc
 import numpy as np
 import rumps
 import sounddevice as sd
-from AppKit import (NSBundle, NSEvent, NSEventMaskFlagsChanged, NSPasteboard, NSPasteboardItem,
+from AppKit import (NSApp, NSApplicationActivationPolicyAccessory, NSApplicationActivationPolicyRegular, NSBundle, NSEvent, NSEventMaskFlagsChanged, NSPasteboard, NSPasteboardItem,
                     NSPasteboardTypeString, NSWorkspace)
 from ApplicationServices import (AXIsProcessTrusted, AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue,
                                  AXUIElementCreateApplication, AXUIElementIsAttributeSettable,
@@ -32,7 +33,7 @@ from PyObjCTools.AppHelper import callAfter
 from ServiceManagement import SMAppService
 from Quartz import CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags, kCGEventFlagMaskCommand, kCGHIDEventTap
 
-from ui import Window
+from ui import Window, install_edit_menu
 
 SR = 16000
 MODEL = os.environ.get("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
@@ -49,6 +50,7 @@ DEFAULT_SETTINGS = {
     "paste": True,  # coller dans le champ de texte actif
     "restore_clipboard": True,  # remettre l'ancien presse-papiers après collage
     "language": os.environ.get("WHISPER_LANG", "fr"),  # "" = détection automatique
+    "dock": True,  # icône dans le Dock en plus de la barre de menus
 }
 
 
@@ -513,6 +515,8 @@ class App(rumps.App):
         threading.Thread(target=self._warm_up, daemon=True).start()
 
     def _on_start(self):
+        install_edit_menu()
+        self.apply_dock()
         # écoute d'Option droite sur le thread principal (nécessite l'autorisation Accessibilité)
         self._monitors = [
             NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, self.on_flags),
@@ -555,6 +559,11 @@ class App(rumps.App):
 
     def push_state(self):
         self.window.emit("state", self.snapshot())
+
+    def apply_dock(self):
+        # LSUIElement démarre l'app sans Dock ; on l'y ajoute si le réglage le demande
+        NSApp.setActivationPolicy_(NSApplicationActivationPolicyRegular if SETTINGS["dock"]
+                                   else NSApplicationActivationPolicyAccessory)
 
     def sync_menu(self):
         self.paste_item.state = SETTINGS["paste"]
@@ -620,6 +629,9 @@ class App(rumps.App):
             SETTINGS[args["key"]] = args["value"]
             save_settings()
             self.sync_menu()
+            if args["key"] == "dock":
+                self.apply_dock()
+                self.window.show()  # repasser en mode Dock fait perdre le premier plan à la fenêtre
             return self.snapshot()
         if action == "login":
             set_login_item(bool(args["value"]))
@@ -767,6 +779,17 @@ class App(rumps.App):
             self.window.emit("recordings", list_recordings())
 
 
+def _reopen(delegate, app, has_visible_windows):
+    """Clic sur l'icône du Dock : on rouvre la fenêtre (méthode ajoutée au délégué de rumps)."""
+    _APP.window.show()
+    return True
+
+
+objc.classAddMethods(rumps.rumps.NSApp, [
+    objc.selector(_reopen, selector=b"applicationShouldHandleReopen:hasVisibleWindows:", signature=b"Z@:@Z")])
+_APP = None
+
+
 def self_test(wav_path):
     """MACDICTEE_SELFTEST=fichier.wav : vérifie qu'une app construite sait transcrire, sans interface."""
     import sys
@@ -779,4 +802,5 @@ def self_test(wav_path):
 if __name__ == "__main__":
     if os.environ.get("MACDICTEE_SELFTEST"):
         self_test(os.environ["MACDICTEE_SELFTEST"])
-    App().run()
+    _APP = App()
+    _APP.run()
