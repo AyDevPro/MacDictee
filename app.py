@@ -191,8 +191,9 @@ def vocab_prompt():
     return prompt[-600:] or None  # Whisper limite la taille du prompt : on garde les plus récents
 
 
-def transcribe(audio: np.ndarray) -> dict:
-    kwargs = dict(path_or_hf_repo=MODEL, condition_on_previous_text=False,
+def transcribe(audio: np.ndarray, words: bool = False) -> dict:
+    """words=True : horodatage de chaque mot (réunions, pour attribuer chaque mot au bon intervenant)."""
+    kwargs = dict(path_or_hf_repo=MODEL, condition_on_previous_text=False, word_timestamps=words,
                   no_speech_threshold=0.6, compression_ratio_threshold=2.4)
     if SETTINGS["language"]:
         kwargs["language"] = SETTINGS["language"]
@@ -448,12 +449,16 @@ class LongRecording:
         wf.close()
 
     def _transcribe_chunk(self, audio, offset):
-        res = transcribe(audio)
-        with open(self.txt_path, "a", encoding="utf-8") as f:
+        res = transcribe(audio, words=True)
+        with open(self.txt_path, "a", encoding="utf-8") as f, \
+                open(speakers.words_path(self.txt_path), "a", encoding="utf-8") as fw:
             for s in res["segments"]:
                 a, b, text = s["start"] + offset, s["end"] + offset, s["text"].strip()
                 self.segments.append((a, b, text))
                 f.write(f"[{fmt(a)}] {text}\n")
+                words = [[w["word"], round(float(w["start"]) + offset, 2), round(float(w["end"]) + offset, 2)]
+                         for w in s.get("words", [])]
+                fw.write(json.dumps({"start": round(a, 2), "end": round(b, 2), "words": words}, ensure_ascii=False) + "\n")
 
 
 # ----------------------------------------------------------------------------- réunions (pour la fenêtre)
@@ -687,7 +692,7 @@ class App(rumps.App):
                 raise ValueError("Cette réunion est en cours de traitement")
             files = [txt.with_suffix(".wav")]
             if args["what"] == "all":
-                files += [txt, *speakers.paths(txt), txt.with_name(txt.stem + "_locuteurs.txt")]
+                files += [txt, *speakers.paths(txt), speakers.words_path(txt), txt.with_name(txt.stem + "_locuteurs.txt")]
             for f in files:
                 trash(f)
             return list_recordings(self.diarizing)
@@ -932,7 +937,8 @@ class App(rumps.App):
                 self.window.emit("speakers_progress", {"stem": stem, "progress": fraction})
 
         try:
-            data = speakers.run(txt, txt.with_suffix(".wav"), count, progress)
+            data = speakers.run(txt, txt.with_suffix(".wav"), count, progress, fix_text=apply_rules,
+                                transcribe_words=lambda audio: transcribe(audio, words=True)["segments"])
             notify("MacDictée", "Réunion prête", f"{len(data['names'])} intervenant(s) identifié(s) : renommez-les dans MacDictée.")
         except Exception as e:
             notify("MacDictée", "Intervenants non identifiés", str(e)[:200])
