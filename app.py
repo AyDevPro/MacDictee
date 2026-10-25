@@ -21,10 +21,11 @@ import mlx_whisper
 import numpy as np
 import rumps
 import sounddevice as sd
-from AppKit import NSWorkspace
+from AppKit import NSPasteboard, NSPasteboardItem, NSWorkspace
 from ApplicationServices import (AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
                                  AXUIElementIsAttributeSettable, AXUIElementSetAttributeValue)
 from pynput import keyboard
+from PyObjCTools.AppHelper import callAfter
 
 SR = 16000
 MODEL = os.environ.get("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
@@ -84,7 +85,7 @@ def register_correction(wrong: str, right: str):
                     f.write(right + "\n")
         LEARN_FILE.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
     if learned:
-        rumps.notification("MacDictée", "Nouveau mot appris", f"{wrong} → {right}")
+        notify("MacDictée", "Nouveau mot appris", f"{wrong} → {right}")
 
 
 def learn_from_edit(original: str, edited: str):
@@ -201,6 +202,11 @@ def get_value(el):
 
 
 # ----------------------------------------------------------------------------- utilitaires
+def notify(title, subtitle, message):
+    """AppKit n'accepte l'interface que sur le thread principal : on y renvoie les notifications."""
+    callAfter(rumps.notification, title, subtitle, message)
+
+
 def play(name):
     path = f"/System/Library/Sounds/{name}.aiff"
     if os.path.exists(path):
@@ -209,6 +215,30 @@ def play(name):
 
 def set_clipboard(text: str) -> None:
     subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=False)
+
+
+def save_clipboard():
+    """Copie de tout le contenu du presse-papiers (texte, images, fichiers…) pour le remettre après collage."""
+    pb = NSPasteboard.generalPasteboard()
+    return [{t: item.dataForType_(t) for t in item.types()} for item in (pb.pasteboardItems() or [])]
+
+
+def restore_clipboard(saved) -> None:
+    pb = NSPasteboard.generalPasteboard()
+    pb.clearContents()
+    items = []
+    for types in saved:
+        item = NSPasteboardItem.alloc().init()
+        for t, data in types.items():
+            if data is not None:
+                item.setData_forType_(data, t)
+        items.append(item)
+    if items:
+        pb.writeObjects_(items)
+
+
+def clipboard_count() -> int:
+    return NSPasteboard.generalPasteboard().changeCount()
 
 
 def press_paste() -> None:
@@ -347,8 +377,10 @@ class App(rumps.App):
         super().__init__("🎙", quit_button="Quitter")
         self.paste_item = rumps.MenuItem("Coller dans le champ de texte actif", callback=self.toggle_paste)
         self.paste_item.state = True
+        self.restore_item = rumps.MenuItem("Remettre le presse-papiers après collage", callback=self.toggle_paste)
+        self.restore_item.state = True
         self.toggle_item = rumps.MenuItem("Démarrer l'enregistrement long", callback=self.toggle_long)
-        self.menu = [self.toggle_item, self.paste_item, None,
+        self.menu = [self.toggle_item, self.paste_item, self.restore_item, None,
                      rumps.MenuItem("Modifier le vocabulaire…", callback=lambda _: subprocess.run(["open", str(VOCAB_FILE)])),
                      rumps.MenuItem("Voir les mots appris…", callback=self.show_learned),
                      rumps.MenuItem("Ouvrir le dossier des transcriptions", callback=lambda _: subprocess.run(["open", str(OUT_DIR)]))]
@@ -369,12 +401,15 @@ class App(rumps.App):
     def toggle_paste(self, sender):
         sender.state = not sender.state
 
+    def set_title(self, title):
+        callAfter(setattr, self, "title", title)  # appelé depuis des threads : on passe par le thread principal
+
     # --- dictée
     def on_press(self, key):
         if key == HOTKEY and not self.dictating and self.long is None:
             self.dictating = True
             self.paste_gen += 1  # clôt la surveillance de la dictée précédente (analyse la correction)
-            self.title = "🔴"
+            self.set_title("🔴")
             play("Tink")
             self.dictation.start()
             threading.Thread(target=lambda: enable_accessibility(front_pid()), daemon=True).start()
@@ -384,7 +419,7 @@ class App(rumps.App):
             self.dictating = False
             audio = self.dictation.stop()
             play("Pop")
-            self.title = "⏳"
+            self.set_title("⏳")
             threading.Thread(target=self._finish_dictation, args=(audio,), daemon=True).start()
 
     def _finish_dictation(self, audio):
@@ -394,24 +429,30 @@ class App(rumps.App):
             text = transcribe(audio)["text"]
             if not text:
                 return
-            set_clipboard(text)  # toujours dans le presse-papiers
+            saved = save_clipboard()
+            set_clipboard(text)  # sans collage, le texte reste dans le presse-papiers
             if not self.paste_item.state:
                 return
             focused = text_field_focused()
             if focused is False:
-                rumps.notification("MacDictée", "Copié dans le presse-papiers",
+                notify("MacDictée", "Copié dans le presse-papiers",
                                    "Aucun champ de texte actif : faites Cmd+V où vous voulez.")
             else:  # True, ou indéterminé : on tente de coller
                 el = get_focused_element()
                 before = get_value(el) if el is not None else None
+                count = clipboard_count()
                 press_paste()
+                if self.restore_item.state:
+                    time.sleep(0.5)  # laisse l'app cible lire le presse-papiers avant de le remettre
+                    if clipboard_count() == count:  # sauf si vous avez copié autre chose entre-temps
+                        restore_clipboard(saved)
                 self.paste_gen += 1
                 threading.Thread(target=self._watch_edits, args=(text, el, before, self.paste_gen),
                                  daemon=True).start()
         except Exception as e:
-            rumps.notification("MacDictée", "Erreur de dictée", str(e)[:200])
+            notify("MacDictée", "Erreur de dictée", str(e)[:200])
         finally:
-            self.title = "🎙"
+            self.set_title("🎙")
 
     def _watch_edits(self, text, el, before, gen):
         """Surveille le champ après le collage : si vous corrigez un mot, on l'apprend."""
@@ -463,10 +504,10 @@ class App(rumps.App):
             try:
                 out = rec.label_speakers()
             except Exception as e:  # la diarisation est facultative
-                rumps.notification("MacDictée", "Locuteurs non identifiés", str(e)[:200])
-            rumps.notification("MacDictée", "Transcription terminée", str(out or rec.txt_path))
+                notify("MacDictée", "Locuteurs non identifiés", str(e)[:200])
+            notify("MacDictée", "Transcription terminée", str(out or rec.txt_path))
         finally:
-            self.title = "🎙"
+            self.set_title("🎙")
 
 
 if __name__ == "__main__":

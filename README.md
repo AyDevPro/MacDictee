@@ -5,7 +5,7 @@ Dictée vocale et transcription longue durée pour Mac, 100 % locale (aucune don
 ## Installation
 
 ```bash
-cd MacDictee
+cd ~/Dev/MacDictee   # sur le disque interne : l'app pointe vers ce dossier
 chmod +x install.sh
 ./install.sh              # ou ./install.sh --locuteurs pour l'identification des personnes
 ```
@@ -23,7 +23,7 @@ Le premier lancement télécharge le modèle Whisper (~1,5 Go).
 **Dictée rapide (comme Wispr Flow)** : maintenez la touche **Option droite**, parlez, relâchez.
 - Si le curseur est dans un champ de texte : le texte est collé.
 - Si aucun champ de texte n'est actif : le texte est seulement copié, vous recevez une notification et vous collez où vous voulez avec Cmd+V.
-- Dans tous les cas, le texte reste dans votre presse-papiers.
+- Après un collage, votre presse-papiers précédent est remis en place (comme Wispr Flow). Option désactivable dans le menu 🎙 (*Remettre le presse-papiers après collage*) pour garder le texte dicté.
 - Le menu 🎙 permet de désactiver le collage automatique (presse-papiers seul).
 
 **Vocabulaire personnalisé** : menu 🎙 > *Modifier le vocabulaire…*, un mot ou nom propre par ligne (prénoms, marques, jargon). Whisper les écrira correctement.

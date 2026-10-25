@@ -6,8 +6,12 @@ cd "$(dirname "$0")"
 command -v brew >/dev/null || { echo "Homebrew est requis : https://brew.sh"; exit 1; }
 brew list portaudio >/dev/null 2>&1 || brew install portaudio
 brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+# Python 3.12 : version la mieux supportée par mlx, pyobjc et torch (le python3 système peut être trop récent)
+brew list python@3.12 >/dev/null 2>&1 || brew install python@3.12
+PY="$(brew --prefix python@3.12)/bin/python3.12"
 
-python3 -m venv .venv
+[ -d .venv ] && ! .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 12)' 2>/dev/null && rm -rf .venv
+"$PY" -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
