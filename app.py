@@ -213,8 +213,14 @@ def vocab_prompt():
 def ensure_model():
     """Prépare le modèle 8 bits une fois pour toutes : téléchargement du modèle complet, conversion, puis
     suppression du modèle complet (1,5 Go libérés). Appelé sous _model_lock."""
+    global _cache_checked
     target = Path(MODEL)
-    if os.environ.get("WHISPER_MODEL") or (target / "weights.safetensors").exists():
+    if os.environ.get("WHISPER_MODEL"):
+        return
+    if (target / "weights.safetensors").exists():
+        if not _cache_checked:  # une ancienne version a pu retélécharger le modèle complet : on le retire
+            _cache_checked = True
+            drop_cached_model(MODEL_SOURCE)
         return
     from huggingface_hub import snapshot_download
     from mlx.utils import tree_flatten
@@ -248,6 +254,7 @@ def drop_cached_model(repo_id):
 
 
 _last_use = time.monotonic()
+_cache_checked = False
 
 
 def unload_model():
@@ -277,6 +284,7 @@ def transcribe(audio: np.ndarray, words: bool = False) -> dict:
         res = mlx_whisper.transcribe(audio, **kwargs)
         mx.clear_cache()  # rend la mémoire de travail (jusqu'à ~700 Mo au pic) au lieu de la garder en réserve
         _last_use = time.monotonic()
+_cache_checked = False
     segs = []
     for s in res.get("segments", []):
         text = s["text"].strip()
