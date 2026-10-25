@@ -27,7 +27,7 @@ body {
 nav { width: 200px; background: var(--side); border-right: 1px solid var(--line); padding: 18px 10px; flex-shrink: 0; }
 nav .brand { font-weight: 700; font-size: 15px; padding: 0 10px 14px; display: flex; align-items: center; gap: 8px; }
 nav .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); }
-nav .dot.ecoute, nav .dot.reunion { background: var(--red); animation: pulse 1s infinite; }
+nav .dot.ecoute, nav .dot.mainslibres, nav .dot.reunion { background: var(--red); animation: pulse 1s infinite; }
 nav .dot.transcription { background: var(--amber); }
 @keyframes pulse { 50% { opacity: .35; } }
 nav button {
@@ -131,7 +131,8 @@ tr:last-child td { border-bottom: 0; }
   <section id="accueil" class="active">
     <div id="update-banner"></div>
     <h1>Bonjour 👋</h1>
-    <p class="sub">Maintenez <kbd class="hk">⌥ Option droite</kbd>, parlez, relâchez. Le texte est collé là où se trouve votre curseur.</p>
+    <p class="sub">Maintenez <kbd class="hk">⌥ Option droite</kbd>, parlez, relâchez : le texte est collé là où se trouve votre curseur.
+      <br><b>Mains libres :</b> appuyez deux fois rapidement sur <kbd class="hk">⌥ Option droite</kbd>, parlez aussi longtemps que vous voulez, puis appuyez une fois pour terminer (Échap pour annuler).</p>
     <div class="card hero">
       <div class="icon" id="hero-icon">🎙</div>
       <div class="grow">
@@ -197,6 +198,14 @@ tr:last-child td { border-bottom: 0; }
         <div class="grow"><b>Touche de dictée</b><div class="muted small">Maintenez-la pour parler, relâchez pour transcrire.</div>
           <div class="muted small" id="fn-hint" style="display:none">Pour fn / 🌐 : Réglages Système &gt; Clavier &gt; « Appuyer sur 🌐 pour » &gt; <b>Ne rien faire</b>.</div></div>
         <select data-setting="hotkey" id="hotkey-select"></select>
+      </div>
+      <div class="row">
+        <div class="grow"><b>Double appui = mains libres</b><div class="muted small">Deux appuis rapides : la dictée continue sans tenir la touche, jusqu'au prochain appui.</div></div>
+        <label class="switch"><input type="checkbox" data-setting="handsfree"><span></span></label>
+      </div>
+      <div class="row">
+        <div class="grow"><b>Pastille en bas de l'écran</b><div class="muted small">Indique que MacDictée écoute (avec le niveau du micro) ou transcrit.</div></div>
+        <label class="switch"><input type="checkbox" data-setting="overlay"><span></span></label>
       </div>
       <div class="row">
         <div class="grow"><b>Coller automatiquement</b><div class="muted small">Sinon le texte est seulement copié dans le presse-papiers.</div></div>
@@ -291,6 +300,7 @@ let state = null, timer = null;
 const STATES = {
   pret: ["🎙", "Prêt", "Maintenez la touche de dictée pour parler."],
   ecoute: ["🔴", "Je vous écoute…", "Relâchez la touche pour transcrire."],
+  mainslibres: ["🔴", "Mains libres", "Appuyez une fois sur la touche pour terminer, Échap pour annuler."],
   transcription: ["⏳", "Transcription…", "Quelques instants."],
   reunion: ["🔴", "Réunion en cours", ""],
 };

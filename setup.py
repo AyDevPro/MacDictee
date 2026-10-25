@@ -26,7 +26,7 @@ OPTIONS = {
     "packages": ["mlx_whisper", "rumps", "sounddevice", "_sounddevice_data", "numpy", "scipy", "numba",
                  "llvmlite", "tiktoken", "sherpa_onnx", "huggingface_hub", "certifi", "tqdm",
                  "AppKit", "ApplicationServices", "Quartz", "WebKit", "AVFoundation", "ServiceManagement"],
-    "includes": ["ui", "updates", "speakers"],
+    "includes": ["ui", "updates", "speakers", "overlay"],
     # torch n'est jamais chargé pour transcrire (seulement pour convertir des modèles) : ~600 Mo économisés.
     # mlx et tiktoken_ext sont des « namespace packages » que py2app ne sait pas collecter : build.sh les copie.
     "excludes": ["mlx", "tiktoken_ext", "torch", "torchaudio", "sympy", "pynput", "tkinter", "matplotlib", "IPython", "pytest"],

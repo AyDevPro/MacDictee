@@ -30,12 +30,13 @@ from ApplicationServices import (AXIsProcessTrusted, AXIsProcessTrustedWithOptio
                                  AXUIElementSetAttributeValue)
 from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
 from Foundation import NSURL, NSFileManager
-from PyObjCTools.AppHelper import callAfter
+from PyObjCTools.AppHelper import callAfter, callLater
 from ServiceManagement import SMAppService
 from Quartz import CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags, kCGEventFlagMaskCommand, kCGHIDEventTap
 
 import speakers
 import updates
+from overlay import Overlay
 from ui import Window, install_edit_menu
 
 SR = 16000
@@ -51,6 +52,9 @@ HOTKEYS = {
     "fn": (63, 0x800000, "fn / 🌐"),
 }
 V_KEYCODE = 9
+ESCAPE_KEYCODE = 53
+TAP_MAX = 0.3  # appui plus court : c'est un « tap » (peut-être le premier d'un double appui)
+DOUBLE_TAP_WINDOW = 0.35  # délai pour le second tap qui passe en mains libres
 OUT_DIR = Path.home() / "Transcriptions"
 OUT_DIR.mkdir(exist_ok=True)
 
@@ -76,6 +80,8 @@ DEFAULT_SETTINGS = {
     "dock": True,  # icône dans le Dock en plus de la barre de menus
     "hotkey": "alt_r",  # clé de HOTKEYS
     "speakers": True,  # séparer les intervenants à la fin d'une réunion
+    "overlay": True,  # pastille en bas de l'écran pendant la dictée
+    "handsfree": True,  # double appui = dictée continue jusqu'au prochain appui
 }
 
 
@@ -367,16 +373,21 @@ def fmt(sec: float) -> str:
 
 # ----------------------------------------------------------------------------- enregistrements
 class Dictation:
-    """Enregistrement court tant que la touche est maintenue."""
+    """Enregistrement d'une dictée (touche maintenue, ou mains libres) ; level = niveau du micro pour la pastille."""
 
     def __init__(self):
         self.frames = []
         self.stream = None
+        self.level = 0.0
+
+    def _on_audio(self, data, frames, time_info, status):
+        self.frames.append(data.copy())
+        self.level = float(np.sqrt(np.mean(data ** 2)))
 
     def start(self):
         self.frames = []
-        self.stream = sd.InputStream(samplerate=SR, channels=1, dtype="float32",
-                                     callback=lambda d, f, t, s: self.frames.append(d.copy()))
+        self.level = 0.0
+        self.stream = sd.InputStream(samplerate=SR, channels=1, dtype="float32", callback=self._on_audio)
         self.stream.start()
 
     def stop(self) -> np.ndarray:
@@ -510,7 +521,7 @@ def inside_out_dir(path) -> Path:
 
 
 # ----------------------------------------------------------------------------- application
-STATUS_TITLES = {"pret": "🎙", "ecoute": "🔴", "transcription": "⏳", "reunion": "🔴 réunion"}
+STATUS_TITLES = {"pret": "🎙", "ecoute": "🔴", "mainslibres": "🔴", "transcription": "⏳", "reunion": "🔴 réunion"}
 
 
 class App(rumps.App):
@@ -525,7 +536,13 @@ class App(rumps.App):
         self.sync_menu()
         self.window = Window(self.handle)
         self.dictation = Dictation()
-        self.dictating = False
+        self.dictating = False  # un enregistrement de dictée est en cours (maintenu, tap en attente ou mains libres)
+        self.handsfree = False
+        self.tap_pending = False  # tap bref : on attend un éventuel second tap
+        self.ignore_release = False  # relâchement d'un appui qui a déjà servi (passage en / sortie de mains libres)
+        self.press_time = 0.0
+        self.tap_gen = 0
+        self.overlay = Overlay(lambda: self.dictation.level)
         self.paste_gen = 0
         self.long = None
         self.status = "pret"
@@ -565,7 +582,14 @@ class App(rumps.App):
     def set_status(self, status):
         self.status = status
         callAfter(setattr, self, "title", STATUS_TITLES[status])  # appelé depuis des threads
+        callAfter(self._sync_overlay, status)
         self.push_state()
+
+    def _sync_overlay(self, status):
+        if SETTINGS["overlay"] and status in Overlay.TEXTS:
+            self.overlay.show(status)
+        else:
+            self.overlay.hide()
 
     def snapshot(self):
         bundle = str(NSBundle.mainBundle().bundlePath())
@@ -790,42 +814,76 @@ class App(rumps.App):
             self.on_release()
 
     def on_key_down(self, event):
+        if not self.dictating:
+            return
+        if self.handsfree:
+            if event.keyCode() == ESCAPE_KEYCODE:  # Échap annule le mode mains libres
+                self.cancel_dictation()
+            return
         # touche tapée pendant que le raccourci est maintenu (ex. ⌥ + e pour un caractère) : ce n'est pas une dictée
-        if self.dictating:
-            self.dictating = False
-            self.dictation.stop()
-            self.set_status("pret")
+        self.cancel_dictation()
 
     def _on_local_key_down(self, event):
         self.on_key_down(event)
         return event
 
-    def _on_local_flags(self, event):
-        self.on_flags(event)  # quand la fenêtre MacDictée a le focus, le moniteur global ne voit rien
-        return event
-
     def on_press(self):
-        if not self.dictating and self.long is None:
-            self.dictating = True
-            self.paste_gen += 1  # clôt la surveillance de la dictée précédente (analyse la correction)
-            self.set_status("ecoute")
-            play("Tink")
-            try:
-                self.dictation.start()
-            except Exception as e:
-                self.dictating = False
-                self.set_status("pret")
-                notify("MacDictée", "Micro indisponible", str(e)[:200])
-                return
-            threading.Thread(target=lambda: enable_accessibility(front_pid()), daemon=True).start()
+        if self.handsfree:  # appui pendant le mode mains libres : on termine
+            self.handsfree = False
+            self.ignore_release = True
+            self.finish_dictation()
+            return
+        if self.tap_pending:  # second tap rapide : mains libres, l'enregistrement continue
+            self.tap_pending = False
+            self.handsfree = True
+            self.ignore_release = True
+            play("Morse")
+            self.set_status("mainslibres")
+            return
+        if self.dictating or self.long is not None:
+            return
+        self.dictating = True
+        self.press_time = time.monotonic()
+        self.paste_gen += 1  # clôt la surveillance de la dictée précédente (analyse la correction)
+        self.set_status("ecoute")
+        play("Tink")
+        try:
+            self.dictation.start()
+        except Exception as e:
+            self.dictating = False
+            self.set_status("pret")
+            notify("MacDictée", "Micro indisponible", str(e)[:200])
+            return
+        threading.Thread(target=lambda: enable_accessibility(front_pid()), daemon=True).start()
 
     def on_release(self):
-        if self.dictating:
-            self.dictating = False
-            audio = self.dictation.stop()
-            play("Pop")
-            self.set_status("transcription")
-            threading.Thread(target=self._finish_dictation, args=(audio, front_app_name()), daemon=True).start()
+        if self.ignore_release:
+            self.ignore_release = False
+            return
+        if not self.dictating or self.handsfree or self.tap_pending:
+            return
+        if SETTINGS["handsfree"] and time.monotonic() - self.press_time < TAP_MAX:
+            self.tap_pending = True  # on continue d'enregistrer en attendant un éventuel second tap
+            self.tap_gen += 1
+            callLater(DOUBLE_TAP_WINDOW, self._tap_timeout, self.tap_gen)
+            return
+        self.finish_dictation()
+
+    def _tap_timeout(self, gen):
+        if self.tap_pending and gen == self.tap_gen:  # un seul tap bref : rien à transcrire
+            self.cancel_dictation()
+
+    def cancel_dictation(self):
+        self.dictating = self.handsfree = self.tap_pending = False
+        self.dictation.stop()
+        self.set_status("pret")
+
+    def finish_dictation(self):
+        self.dictating = self.handsfree = self.tap_pending = False
+        audio = self.dictation.stop()
+        play("Pop")
+        self.set_status("transcription")
+        threading.Thread(target=self._finish_dictation, args=(audio, front_app_name()), daemon=True).start()
 
     def _finish_dictation(self, audio, app_name):
         try:
@@ -859,7 +917,8 @@ class App(rumps.App):
         except Exception as e:
             notify("MacDictée", "Erreur de dictée", str(e)[:200])
         finally:
-            self.set_status("pret")
+            if not self.dictating:  # une nouvelle dictée a pu commencer pendant la transcription
+                self.set_status("pret")
 
     def _watch_edits(self, text, el, before, gen):
         """Surveille le champ après le collage : si vous corrigez un mot, on l'apprend."""
