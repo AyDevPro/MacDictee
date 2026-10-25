@@ -21,6 +21,8 @@ SITE=$("$PY" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
 for ns in mlx tiktoken_ext; do  # namespace packages ignorés par py2app (voir setup.py)
   cp -R "$SITE/$ns" "$APP/Contents/Resources/lib/python3.12/"
 done
+# module Swift de capture du son du Mac (visios), lancé par l'app pendant les réunions
+swiftc -O -target arm64-apple-macos13.0 -o "$APP/Contents/MacOS/macdictee-audio" native/audio_capture.swift
 
 if [ -n "$SIGN_ID" ]; then
   # chaque binaire doit être signé, de l'intérieur vers l'extérieur, avec le hardened runtime

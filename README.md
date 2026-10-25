@@ -70,7 +70,9 @@ La fenêtre *Ouvrir MacDictée…* (menu 🎙) montre l'état des autorisations,
 - À l'arrêt, les intervenants sont séparés automatiquement (« Intervenant 1, 2, 3… », réglage désactivable) : renommez-les dans la fenêtre, onglet Réunions. Si le nombre détecté est faux, relancez en indiquant le nombre de personnes. Fichiers : `..._intervenants.txt` (lisible) et `..._intervenants.json`. Les modèles (~35 Mo, sherpa-onnx) se téléchargent la première fois dans `~/Library/Application Support/MacDictee/modeles`.
 - Onglet Réunions : *Supprimer l'audio* (garde le texte, utile une fois le résumé fait) ou *Supprimer la réunion* (audio + textes). Les fichiers vont à la Corbeille.
 
-Attention : seul le **micro** est enregistré. Pour capter aussi l'autre côté d'un appel (Zoom, Teams, Meet), il faut un périphérique audio virtuel type BlackHole, à choisir comme entrée.
+**Visios (Meet, WhatsApp, Zoom…)** : avec le réglage *Capter le son du Mac pendant les réunions* (activé par défaut) et l'autorisation « Enregistrement de l'écran et audio système », MacDictée enregistre votre micro **et** le son du Mac. Dans la transcription, vous apparaissez comme « Moi » et les gens de la visio sont séparés entre eux (Intervenant 1, 2…). Sans l'autorisation, seul le micro est enregistré.
+
+**Mains libres** : appuyez deux fois rapidement sur la touche de dictée, parlez aussi longtemps que vous voulez, puis appuyez une fois pour terminer (Échap pour annuler). Une pastille en bas de l'écran indique que MacDictée écoute.
 
 ## Réglages
 

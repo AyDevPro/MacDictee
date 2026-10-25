@@ -32,7 +32,7 @@ from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
 from Foundation import NSURL, NSFileManager
 from PyObjCTools.AppHelper import callAfter, callLater
 from ServiceManagement import SMAppService
-from Quartz import CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags, kCGEventFlagMaskCommand, kCGHIDEventTap
+from Quartz import CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags, kCGEventFlagMaskCommand, kCGHIDEventTap
 
 import speakers
 import updates
@@ -82,6 +82,7 @@ DEFAULT_SETTINGS = {
     "speakers": True,  # séparer les intervenants à la fin d'une réunion
     "overlay": True,  # pastille en bas de l'écran pendant la dictée
     "handsfree": True,  # double appui = dictée continue jusqu'au prochain appui
+    "system_audio": True,  # réunions : enregistrer aussi le son du Mac (visios), sur une piste à part
 }
 
 
@@ -349,7 +350,8 @@ def press_paste() -> None:
 def permissions():
     mic = AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio)  # 0 pas demandé, 3 accordé
     return {"micro": {0: "inconnu", 3: "ok"}.get(mic, "refusé"),
-            "accessibility": "ok" if AXIsProcessTrusted() else "refusé"}
+            "accessibility": "ok" if AXIsProcessTrusted() else "refusé",
+            "screen": "ok" if CGPreflightScreenCaptureAccess() else "refusé"}  # son du Mac (visios)
 
 
 def login_item_enabled() -> bool:
@@ -399,10 +401,85 @@ class Dictation:
         return np.concatenate(self.frames)[:, 0]
 
 
-class LongRecording:
-    """Sans limite de durée : WAV écrit en continu + transcription par blocs coupés sur les silences."""
+def audio_helper() -> Path:
+    """Binaire Swift qui capture le son du Mac : dans l'app (Contents/MacOS) ou compilé dans native/."""
+    bundle = NSBundle.mainBundle()
+    if bundle.bundleIdentifier() == "fr.local.macdictee":
+        bundled = Path(str(bundle.executablePath())).parent / "macdictee-audio"
+        if bundled.exists():
+            return bundled
+    return Path(__file__).resolve().parent / "native" / "macdictee-audio"
+
+
+class SystemAudio:
+    """Son du Mac (visios…) lu en continu depuis macdictee-audio, distribué au rythme du micro."""
 
     def __init__(self):
+        helper = audio_helper()
+        if not helper.exists():
+            raise RuntimeError("module de capture du son du Mac absent")
+        self.proc = subprocess.Popen([str(helper)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE)
+        self.buf = bytearray()
+        self.lock = threading.Lock()
+        self.debt = 0  # échantillons de silence ajoutés faute de données, à rattraper pour rester synchrone
+        self.ready = threading.Event()
+        self.error = None
+        threading.Thread(target=self._read_audio, daemon=True).start()
+        threading.Thread(target=self._read_log, daemon=True).start()
+        self.ready.wait(5)
+        if self.error or not self.ready.is_set():
+            self.stop()
+            raise RuntimeError(self.error or "le son du Mac ne démarre pas")
+
+    def _read_audio(self):
+        while chunk := self.proc.stdout.read1(65536):
+            with self.lock:
+                self.buf += chunk
+
+    def _read_log(self):
+        for line in self.proc.stderr:
+            line = line.decode("utf-8", "replace").strip()
+            if line == "ready":
+                self.ready.set()
+            elif line.startswith("error"):
+                self.error = line.removeprefix("error:").strip()
+                self.ready.set()
+
+    def take(self, n) -> np.ndarray:
+        """n échantillons int16, alignés sur le bloc micro du même instant."""
+        deadline = time.monotonic() + 0.25
+        while len(self.buf) < n * 4 and time.monotonic() < deadline and self.proc.poll() is None:
+            time.sleep(0.01)
+        with self.lock:
+            got = min(len(self.buf) // 4, n)
+            data = np.frombuffer(bytes(self.buf[:got * 4]), dtype="float32")
+            del self.buf[:got * 4]
+            self.debt += n - got
+            spare = len(self.buf) // 4 - n  # retard rattrapé : on jette l'excédent dû aux silences ajoutés
+            if self.debt and spare > 0:
+                drop = min(self.debt, spare)
+                del self.buf[:drop * 4]
+                self.debt -= drop
+        out = np.zeros(n, dtype="int16")
+        out[:got] = np.clip(data * 32767, -32768, 32767).astype("int16")
+        return out
+
+    def stop(self):
+        try:
+            self.proc.stdin.close()
+            self.proc.wait(timeout=2)
+        except Exception:
+            self.proc.kill()
+
+
+class LongRecording:
+    """Sans limite de durée : WAV écrit en continu + transcription par blocs coupés sur les silences.
+    Avec le son du Mac : <réunion>.wav = micro + son du Mac (ce qu'on transcrit et écoute),
+    <réunion>_systeme.wav = son du Mac seul (sert à distinguer « Moi » des gens de la visio)."""
+
+    def __init__(self, system=None):
+        self.system = system
         self.started = datetime.datetime.now()
         stamp = self.started.strftime("%Y-%m-%d_%Hh%M")
         self.wav_path = OUT_DIR / f"{stamp}.wav"
@@ -425,6 +502,8 @@ class LongRecording:
         self.stream.close()
         self.q.put(None)
         self.worker.join()
+        if self.system:
+            self.system.stop()
 
     @staticmethod
     def _tail_is_silent(buf):
@@ -436,10 +515,20 @@ class LongRecording:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(SR)
+        sys_wf = None
+        if self.system:
+            sys_wf = wave.open(str(speakers.system_path(self.txt_path)), "wb")
+            sys_wf.setnchannels(1)
+            sys_wf.setsampwidth(2)
+            sys_wf.setframerate(SR)
         buf, n_buf, offset = [], 0, 0.0
         while True:
             item = self.q.get()
             if item is not None:
+                if self.system:
+                    other = self.system.take(len(item))
+                    sys_wf.writeframes(other.tobytes())
+                    item = np.clip(item[:, 0].astype("int32") + other, -32768, 32767).astype("int16")[:, None]
                 wf.writeframes(item.tobytes())
                 buf.append(item)
                 n_buf += len(item)
@@ -458,6 +547,8 @@ class LongRecording:
             if item is None:
                 break
         wf.close()
+        if sys_wf:
+            sys_wf.close()
 
     def _transcribe_chunk(self, audio, offset):
         res = transcribe(audio, words=True)
@@ -505,6 +596,7 @@ def list_recordings(diarizing=None):
             "txt": str(txt),
             "wav": str(wav) if wav.exists() else None,
             "speakers_txt": str(speakers_txt) if speakers_json.exists() else None,
+            "system": speakers.system_path(txt).exists(),
             "diarizing": diarizing.get(txt.stem),
             "duration": max(0, wav.stat().st_size - 44) / (2 * SR) if wav.exists() else None,
             "lines": len(lines),
@@ -570,7 +662,7 @@ class App(rumps.App):
             AXIsProcessTrustedWithOptions({"AXTrustedCheckOptionPrompt": True})
         if perms["micro"] == "inconnu":
             AVCaptureDevice.requestAccessForMediaType_completionHandler_(AVMediaTypeAudio, lambda ok: self.push_state())
-        if set(perms.values()) != {"ok"}:
+        if perms["micro"] != "ok" or perms["accessibility"] != "ok":  # le son du Mac est facultatif
             self.window.show()  # premier lancement ou autorisation manquante : on montre où ça coince
 
     def _warm_up(self):
@@ -714,7 +806,7 @@ class App(rumps.App):
             txt = recording_txt(args["stem"])
             if (self.long and self.long.txt_path == txt) or args["stem"] in self.diarizing:
                 raise ValueError("Cette réunion est en cours de traitement")
-            files = [txt.with_suffix(".wav")]
+            files = [txt.with_suffix(".wav"), speakers.system_path(txt)]
             if args["what"] == "all":
                 files += [txt, *speakers.paths(txt), speakers.words_path(txt), txt.with_name(txt.stem + "_locuteurs.txt")]
             for f in files:
@@ -790,6 +882,8 @@ class App(rumps.App):
             set_login_item(bool(args["value"]))
             return self.snapshot()
         if action == "privacy":
+            if args["what"] == "ScreenCapture" and not CGPreflightScreenCaptureAccess():
+                CGRequestScreenCaptureAccess()
             if args["what"] == "Microphone" and permissions()["micro"] == "inconnu":
                 AVCaptureDevice.requestAccessForMediaType_completionHandler_(AVMediaTypeAudio, lambda ok: self.push_state())
             elif args["what"] == "Accessibility":
@@ -955,7 +1049,18 @@ class App(rumps.App):
         if self.long is None:
             if self.dictating:
                 return
-            self.long = LongRecording()
+            system = None
+            if SETTINGS["system_audio"]:
+                if not CGPreflightScreenCaptureAccess():
+                    CGRequestScreenCaptureAccess()  # demande l'autorisation (une fois) ; on enregistre le micro seul
+                    notify("MacDictée", "Son du Mac non capté",
+                           "Autorisez « Enregistrement de l'écran et audio système » pour MacDictée, puis relancez-la.")
+                else:
+                    try:
+                        system = SystemAudio()
+                    except Exception as e:
+                        notify("MacDictée", "Son du Mac non capté", f"Micro seul : {e}"[:200])
+            self.long = LongRecording(system)
             self.long.start()
             self.toggle_item.title = "Arrêter l'enregistrement long"
             self.set_status("reunion")
@@ -1026,6 +1131,11 @@ def self_test(wav_path):
     print("SELFTEST:", transcribe(audio)["text"], flush=True)
     speakers.ensure_models()
     print("SELFTEST intervenants :", len({s for _, _, s in speakers.diarize(audio)}), flush=True)
+    try:
+        SystemAudio().stop()
+        print("SELFTEST son du Mac : ok", flush=True)
+    except Exception as e:  # depuis un terminal sans autorisation : refus attendu, mais le module a bien tourné
+        print("SELFTEST son du Mac :", audio_helper().name, "->", e, flush=True)
     try:
         print("SELFTEST mise à jour :", APP_VERSION, "->", updates.latest_release()["version"], flush=True)
     except Exception as e:  # pas encore de version publiée, hors ligne…

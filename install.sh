@@ -17,6 +17,9 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 
+# Module Swift de capture du son du Mac (visios) : utilisé depuis native/ en mode développement
+swiftc -O -target arm64-apple-macos13.0 -o native/macdictee-audio native/audio_capture.swift
+
 # Construit MacDictée.app (mode alias = rapide, utilise le venv du dossier)
 python setup.py py2app -A
 rm -rf "$HOME/Applications/MacDictée.app"

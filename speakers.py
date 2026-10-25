@@ -7,6 +7,8 @@ Fichiers produits à côté de la transcription :
   <réunion>_intervenants.txt   version lisible, régénérée à chaque renommage (à donner à Claude pour un résumé)
 Avec <réunion>_mots.jsonl (horodatage de chaque mot, écrit pendant la réunion), chaque MOT va au bon intervenant :
 deux personnes dans une même phrase de Whisper sont séparées. Sans ce fichier (anciennes réunions), phrase par phrase.
+Visio (<réunion>_systeme.wav = son du Mac enregistré à part) : un mot prononcé pendant que le son du Mac est actif
+vient de la visio, sinon c'est « Moi » ; seuls les gens de la visio passent par la diarisation, sur leur piste propre.
 """
 import json
 import os
@@ -170,26 +172,35 @@ def _speaker_at(a, b, turns):
     return best if best is not None else 0
 
 
+ME = "moi"  # étiquette provisoire de l'utilisateur en visio ; devient l'intervenant 0, nommé « Moi »
+SYSTEM_ACTIVE_RMS = 0.01  # au-dessus, le son du Mac contient quelqu'un qui parle
+
+
+def system_path(txt_path: Path) -> Path:
+    return Path(f"{txt_path.with_suffix('')}_systeme.wav")
+
+
 def _number_by_appearance(segments):
-    """Le premier qui parle est « Intervenant 1 »."""
+    """« Moi » (visio) devient 0 ; les autres sont numérotés dans l'ordre où ils prennent la parole."""
+    has_me = any(seg["speaker"] == ME for seg in segments)
     order = {}
     for seg in segments:
-        seg["speaker"] = order.setdefault(seg["speaker"], len(order))
+        seg["speaker"] = 0 if seg["speaker"] == ME else order.setdefault(seg["speaker"], len(order) + has_me)
     return segments
 
 
-def assign(transcript, turns):
-    """Phrase par phrase (anciennes réunions sans horodatage des mots)."""
-    return _number_by_appearance([{"start": a, "end": b, "speaker": _speaker_at(a, b, turns), "text": text}
+def assign(transcript, label):
+    """Phrase par phrase (anciennes réunions sans horodatage des mots). label(début, fin) -> intervenant."""
+    return _number_by_appearance([{"start": a, "end": b, "speaker": label(a, b), "text": text}
                                   for a, b, text in transcript])
 
 
 SMOOTH_WORDS = 2  # un îlot de 1-2 mots entre deux passages du même intervenant est une erreur de frontière
 
 
-def assign_words(words, turns, fix_text=lambda t: t):
+def assign_words(words, label, fix_text=lambda t: t):
     """Mot par mot, puis regroupement des mots consécutifs du même intervenant."""
-    labels = [_speaker_at(a, b, turns) for _, a, b in words]
+    labels = [label(a, b) for _, a, b in words]
     runs = []  # [intervenant, indice début, indice fin exclu]
     for i, spk in enumerate(labels):
         if runs and runs[-1][0] == spk:
@@ -259,17 +270,35 @@ def run(txt_path: Path, wav_path: Path, num_speakers=None, progress=lambda f: No
     transcribe_words(audio) -> segments avec mots : pour une ancienne réunion sans _mots.jsonl."""
     ensure_models(lambda f: progress(0.1 * f))
     audio = load_wav(wav_path)
-    turns = diarize(audio, num_speakers, lambda f: progress(0.1 + 0.8 * f))
+    diar_progress = lambda f: progress(0.1 + 0.8 * f)
+    if system_path(txt_path).exists():  # visio : « Moi » quand le son du Mac est silencieux
+        system = load_wav(system_path(txt_path))
+        others = max(1, num_speakers - 1) if num_speakers else None  # le nombre choisi m'inclut
+        turns = diarize(system, others, diar_progress)
+
+        def label(a, b):
+            span = system[int(a * SR):int(b * SR) + 1]
+            active = len(span) and float(np.sqrt(np.mean(span ** 2))) > SYSTEM_ACTIVE_RMS
+            return _speaker_at(a, b, turns) if active else ME
+    else:
+        turns = diarize(audio, num_speakers, diar_progress)
+
+        def label(a, b):
+            return _speaker_at(a, b, turns)
     words = load_words(txt_path)
     if words is None and transcribe_words is not None:
         save_words(txt_path, transcribe_words(audio))
         words = load_words(txt_path)
     progress(1.0)
-    segments = (assign_words(words, turns, fix_text) if words
-                else assign(parse_transcript(txt_path, len(audio) / SR), turns))
+    segments = (assign_words(words, label, fix_text) if words
+                else assign(parse_transcript(txt_path, len(audio) / SR), label))
     previous = read(txt_path)
-    count = len({s["speaker"] for s in segments})
-    names = {str(i): f"Intervenant {i + 1}" for i in range(count)}
+    speakers = {s["speaker"] for s in segments}
+    count = len(speakers)
+    if system_path(txt_path).exists() and 0 in speakers:
+        names = {"0": "Moi", **{str(i): f"Intervenant {i}" for i in range(1, max(speakers) + 1)}}
+    else:
+        names = {str(i): f"Intervenant {i + 1}" for i in range(count)}
     if previous and len(previous["names"]) == count:
         names = previous["names"]  # relance avec le même nombre : on garde les noms déjà saisis
     data = {"names": names, "segments": segments}

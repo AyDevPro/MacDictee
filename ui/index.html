@@ -164,7 +164,7 @@ tr:last-child td { border-bottom: 0; }
       <div class="grow"><h1>Réunions</h1><p class="sub" style="margin:0">Enregistrements longs, transcrits au fil de l'eau dans votre dossier Transcriptions.</p></div>
       <button class="btn big" id="rec-long">Démarrer</button>
     </div>
-    <div class="card alert small" style="margin-bottom:14px">Seul le micro est enregistré pour l'instant : en visio, la voix des autres n'est captée que si elle sort de vos haut-parleurs.</div>
+    <div class="card alert small" style="margin-bottom:14px" id="rec-hint"></div>
     <div id="rec-viewer"></div>
     <div class="card" id="rec-list"></div>
   </section>
@@ -226,6 +226,10 @@ tr:last-child td { border-bottom: 0; }
       <div class="row">
         <div class="grow"><b>Séparer les intervenants des réunions</b><div class="muted small">À la fin d'une réunion : « Intervenant 1, 2, 3… », que vous pouvez renommer. Environ 35 Mo téléchargés la première fois.</div></div>
         <label class="switch"><input type="checkbox" data-setting="speakers"><span></span></label>
+      </div>
+      <div class="row">
+        <div class="grow"><b>Capter le son du Mac pendant les réunions</b><div class="muted small">Pour les visios (Meet, WhatsApp, Zoom…) : votre micro devient « Moi », les gens de la visio sont séparés à part. Demande l'autorisation « Enregistrement de l'écran et audio système ».</div></div>
+        <label class="switch"><input type="checkbox" data-setting="system_audio"><span></span></label>
       </div>
       <div class="row">
         <div class="grow"><b>Langue</b><div class="muted small">« Automatique » détecte la langue, mais un peu moins fiable sur les phrases courtes.</div></div>
@@ -339,6 +343,8 @@ function renderState(s) {
   $("#perms").innerHTML =
     perm("micro", "Microphone", "Microphone", "Pour enregistrer votre voix.") +
     perm("accessibility", "Accessibility", "Accessibilité", "Pour détecter la touche de dictée et coller le texte.") +
+    (s.settings.system_audio ? perm("screen", "ScreenCapture", "Son du Mac (visios)",
+      "Facultatif : « Enregistrement de l'écran et audio système », pour capter les gens d'une visio (Meet, WhatsApp, Zoom…). Seul le son est enregistré.") : "") +
     (s.can_restart ? `<div class="row"><div class="grow muted small">Vous venez d'accorder une autorisation ? Relancez l'app pour qu'elle soit prise en compte.</div>
       <button class="btn" onclick="md.call('restart')">Relancer MacDictée</button></div>` : "");
   $("#perm-alert").innerHTML = P.accessibility === "ok" && P.micro === "ok" ? "" :
@@ -355,6 +361,11 @@ function renderState(s) {
   });
   renderUpdate(s.update);
   $("#login-toggle").checked = !!s.login;
+  $("#rec-hint").innerHTML = !s.settings.system_audio
+    ? "Seul le micro est enregistré : en visio, la voix des autres n'est captée que si elle sort de vos haut-parleurs. Activez « Capter le son du Mac » dans Réglages."
+    : s.permissions.screen === "ok"
+      ? "Micro + son du Mac : réunions autour du Mac comme en visio (Meet, WhatsApp, Zoom…). En visio, vous apparaissez comme « Moi »."
+      : `Pour capter les visios, autorisez le son du Mac : <a href="#" onclick="md.call('privacy',{what:'ScreenCapture'});return false">Autoriser…</a> puis relancez MacDictée. En attendant, seul le micro est enregistré.`;
   $("#login-row").style.display = s.can_restart ? "" : "none";
   $("#info-version").textContent = s.version;
   $("#info-model").textContent = s.model.replace("mlx-community/", "");
@@ -459,7 +470,7 @@ function renderRecordings(items) {
   $("#rec-list").innerHTML = items.length ? items.map((r) => `
     <div class="item rec-item" data-rec="${esc(r.stem)}"><div class="grow">
       <div class="meta">${esc(recDate(r.stem))}${r.duration != null ? " · " + fmtDur(r.duration) : " · audio supprimé"}${
-        r.speakers_txt ? " · intervenants identifiés" : ""}${r.diarizing != null ? " · identification des intervenants…" : ""}</div>
+        r.system ? " · micro + son du Mac" : ""}${r.speakers_txt ? " · intervenants identifiés" : ""}${r.diarizing != null ? " · identification des intervenants…" : ""}</div>
       <div class="text">${r.preview ? esc(r.preview) + (r.lines > 1 ? "…" : "") : '<span class="muted">(pas de texte transcrit)</span>'}</div></div>
       <button class="btn">Lire</button></div>`).join("")
     : `<div class="empty">Aucune réunion enregistrée.</div>`;

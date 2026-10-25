@@ -4,7 +4,7 @@ from setuptools import setup
 
 sys.setrecursionlimit(10000)  # l’analyse des imports de py2app est récursive (numpy, scipy, mlx…)
 
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 
 APP = ["app.py"]
 DATA_FILES = [("ui", ["ui/index.html"])]
