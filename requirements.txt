@@ -1,5 +1,6 @@
 mlx-whisper
 rumps
+sherpa-onnx
 sounddevice
 numpy
 pyobjc-framework-Quartz
@@ -9,5 +10,3 @@ pyobjc-framework-ServiceManagement
 pyobjc-framework-Cocoa
 pyobjc-framework-ApplicationServices
 py2app
-# Optionnel, pour identifier les locuteurs (gros téléchargement, ~2 Go avec torch) :
-# pyannote.audio

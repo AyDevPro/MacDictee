@@ -102,6 +102,16 @@ tr:last-child td { border-bottom: 0; }
 .alert { background: var(--amber-soft); color: var(--text); border-color: transparent; }
 .update { background: var(--accent-soft); border-color: transparent; margin-bottom: 14px; }
 .update .notes { white-space: pre-wrap; margin-top: 6px; max-height: 110px; overflow-y: auto; }
+.spk { font-weight: 600; }
+.spk-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+.turn { margin-bottom: 12px; }
+.turn .who { font-size: 12px; margin-bottom: 2px; }
+.turn .who .muted { font-weight: 400; margin-left: 6px; }
+.names { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin: 4px 0 10px; }
+.names label { display: flex; align-items: center; gap: 4px; }
+.names input { flex: 1; min-width: 0; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sep { border-top: 1px solid var(--line); margin: 14px 0; }
 .bar { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 10px; }
 .bar > div { height: 100%; background: var(--accent); transition: width .2s; }
 </style>
@@ -121,7 +131,7 @@ tr:last-child td { border-bottom: 0; }
   <section id="accueil" class="active">
     <div id="update-banner"></div>
     <h1>Bonjour 👋</h1>
-    <p class="sub">Maintenez <kbd>⌥ Option droite</kbd>, parlez, relâchez. Le texte est collé là où se trouve votre curseur.</p>
+    <p class="sub">Maintenez <kbd class="hk">⌥ Option droite</kbd>, parlez, relâchez. Le texte est collé là où se trouve votre curseur.</p>
     <div class="card hero">
       <div class="icon" id="hero-icon">🎙</div>
       <div class="grow">
@@ -184,6 +194,11 @@ tr:last-child td { border-bottom: 0; }
     <p class="sub">Enregistrés automatiquement.</p>
     <div class="card">
       <div class="row">
+        <div class="grow"><b>Touche de dictée</b><div class="muted small">Maintenez-la pour parler, relâchez pour transcrire.</div>
+          <div class="muted small" id="fn-hint" style="display:none">Pour fn / 🌐 : Réglages Système &gt; Clavier &gt; « Appuyer sur 🌐 pour » &gt; <b>Ne rien faire</b>.</div></div>
+        <select data-setting="hotkey" id="hotkey-select"></select>
+      </div>
+      <div class="row">
         <div class="grow"><b>Coller automatiquement</b><div class="muted small">Sinon le texte est seulement copié dans le presse-papiers.</div></div>
         <label class="switch"><input type="checkbox" data-setting="paste"><span></span></label>
       </div>
@@ -200,6 +215,10 @@ tr:last-child td { border-bottom: 0; }
         <label class="switch"><input type="checkbox" id="login-toggle"><span></span></label>
       </div>
       <div class="row">
+        <div class="grow"><b>Séparer les intervenants des réunions</b><div class="muted small">À la fin d'une réunion : « Intervenant 1, 2, 3… », que vous pouvez renommer. Environ 35 Mo téléchargés la première fois.</div></div>
+        <label class="switch"><input type="checkbox" data-setting="speakers"><span></span></label>
+      </div>
+      <div class="row">
         <div class="grow"><b>Langue</b><div class="muted small">« Automatique » détecte la langue, mais un peu moins fiable sur les phrases courtes.</div></div>
         <select data-setting="language">
           <option value="fr">Français</option><option value="en">Anglais</option>
@@ -210,7 +229,6 @@ tr:last-child td { border-bottom: 0; }
     </div>
     <h2>Informations</h2>
     <div class="card">
-      <div class="row"><div class="grow">Raccourci</div><kbd>⌥ Option droite</kbd> <span class="muted small">(maintenir)</span></div>
       <div class="row"><div class="grow">Version</div><span class="muted small" id="info-version"></span>
         <button class="btn" id="update-check">Rechercher des mises à jour</button></div>
       <div class="row"><div class="grow">Modèle</div><span class="muted small" id="info-model"></span></div>
@@ -244,6 +262,8 @@ const md = {
     if (name === "history") renderHistory(data);
     if (name === "recordings") renderRecordings(data);
     if (name === "update_checked") updateChecked(data);
+    if (name === "speakers_progress") speakersProgress(data);
+    if (name === "speakers_done") speakersDone(data);
   },
 };
 window.md = md;
@@ -269,7 +289,7 @@ document.addEventListener("click", (e) => {
 // ---- état
 let state = null, timer = null;
 const STATES = {
-  pret: ["🎙", "Prêt", "Maintenez ⌥ droite pour dicter."],
+  pret: ["🎙", "Prêt", "Maintenez la touche de dictée pour parler."],
   ecoute: ["🔴", "Je vous écoute…", "Relâchez la touche pour transcrire."],
   transcription: ["⏳", "Transcription…", "Quelques instants."],
   reunion: ["🔴", "Réunion en cours", ""],
@@ -308,13 +328,17 @@ function renderState(s) {
   };
   $("#perms").innerHTML =
     perm("micro", "Microphone", "Microphone", "Pour enregistrer votre voix.") +
-    perm("accessibility", "Accessibility", "Accessibilité", "Pour détecter la touche ⌥ droite et coller le texte.") +
+    perm("accessibility", "Accessibility", "Accessibilité", "Pour détecter la touche de dictée et coller le texte.") +
     (s.can_restart ? `<div class="row"><div class="grow muted small">Vous venez d'accorder une autorisation ? Relancez l'app pour qu'elle soit prise en compte.</div>
       <button class="btn" onclick="md.call('restart')">Relancer MacDictée</button></div>` : "");
   $("#perm-alert").innerHTML = P.accessibility === "ok" && P.micro === "ok" ? "" :
     `<div class="card alert" style="margin-top:12px">⚠️ La dictée ne peut pas fonctionner tant que les autorisations ci-dessous ne sont pas accordées.
      Dans Réglages Système, cochez <b>MacDictée</b>, puis cliquez sur <b>Relancer MacDictée</b>.</div>`;
 
+  const sel = $("#hotkey-select");
+  if (!sel.options.length) sel.innerHTML = Object.entries(s.hotkeys).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("");
+  document.querySelectorAll(".hk").forEach((el) => (el.textContent = s.hotkeys[s.settings.hotkey]));
+  $("#fn-hint").style.display = s.settings.hotkey === "fn" ? "" : "none";
   document.querySelectorAll("[data-setting]").forEach((el) => {
     const v = s.settings[el.dataset.setting];
     el.type === "checkbox" ? (el.checked = !!v) : (el.value = v);
@@ -390,7 +414,7 @@ function renderHistory(items) {
   const q = $("#hist-search").value.trim().toLowerCase();
   const shown = items.map((h, i) => [h, i]).filter(([h]) => !q || h.text.toLowerCase().includes(q));
   $("#hist-list").innerHTML = shown.length ? shown.map(([h, i]) => historyItem(h, i)).join("")
-    : `<div class="empty">${q ? "Aucun résultat." : "Aucune dictée pour l'instant. Maintenez ⌥ droite et parlez !"}</div>`;
+    : `<div class="empty">${q ? "Aucun résultat." : "Aucune dictée pour l'instant. Maintenez la touche de dictée et parlez !"}</div>`;
   $("#last-dictation").innerHTML = items.length ? historyItem(items[0], 0).replace('class="item"', 'class="item" style="padding:0"')
     : `<div class="empty" style="padding:8px">Rien encore.</div>`;
 }
@@ -410,38 +434,129 @@ $("#hist-clear").addEventListener("click", async (e) => {
 });
 
 // ---- réunions
-let recordings = [];
+let recordings = [], openStem = null;
+const COLORS = ["#0a66ff", "#e5383b", "#1f9d55", "#b7791f", "#8e44ad", "#00a3a3", "#d6336c", "#5c6ac4"];
+const color = (i) => COLORS[i % COLORS.length];
 async function loadRecordings() { renderRecordings(await md.call("recordings")); }
 function recDate(stem) {
   const [d, t] = stem.split("_"), [y, m, day] = d.split("-");
   return new Date(+y, m - 1, +day).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }) + " à " + t;
 }
+function bar(p) { return `<div class="bar"><div style="width:${Math.round(p * 100)}%"></div></div>`; }
 function renderRecordings(items) {
   recordings = items;
   $("#badge-rec").textContent = items.length || "";
-  $("#rec-list").innerHTML = items.length ? items.map((r, i) => `
-    <div class="item rec-item" data-rec="${i}"><div class="grow">
-      <div class="meta">${esc(recDate(r.stem))}${r.duration != null ? " · " + fmtDur(r.duration) : ""}${r.speakers ? " · locuteurs identifiés" : ""}</div>
+  $("#rec-list").innerHTML = items.length ? items.map((r) => `
+    <div class="item rec-item" data-rec="${esc(r.stem)}"><div class="grow">
+      <div class="meta">${esc(recDate(r.stem))}${r.duration != null ? " · " + fmtDur(r.duration) : " · audio supprimé"}${
+        r.speakers_txt ? " · intervenants identifiés" : ""}${r.diarizing != null ? " · identification des intervenants…" : ""}</div>
       <div class="text">${r.preview ? esc(r.preview) + (r.lines > 1 ? "…" : "") : '<span class="muted">(pas de texte transcrit)</span>'}</div></div>
       <button class="btn">Lire</button></div>`).join("")
     : `<div class="empty">Aucune réunion enregistrée.</div>`;
+  if (openStem) {
+    if (items.some((r) => r.stem === openStem)) openRecording(openStem);
+    else closeRecording();
+  }
 }
-document.addEventListener("click", async (e) => {
+document.addEventListener("click", (e) => {
   const el = e.target.closest("[data-rec]");
-  if (!el) return;
-  const r = recordings[+el.dataset.rec];
-  const text = await md.call("recording_text", { stem: r.stem });
+  if (el && !e.target.closest("#rec-viewer")) openRecording(el.dataset.rec);
+});
+function closeRecording() { openStem = null; $("#rec-viewer").innerHTML = ""; }
+
+// bouton à confirmer d'un second clic (pas de confirm() dans un WKWebView)
+function confirmClick(btn, question, action) {
+  if (btn.dataset.armed) return action();
+  const label = btn.textContent;
+  btn.dataset.armed = "1"; btn.textContent = question; btn.classList.add("rec");
+  setTimeout(() => { delete btn.dataset.armed; btn.textContent = label; btn.classList.remove("rec"); }, 3500);
+}
+
+async function openRecording(stem) {
+  const r = recordings.find((x) => x.stem === stem);
+  if (!r) return;
+  const sameRecording = openStem === stem;
+  openStem = stem;
+  const data = r.speakers_txt ? await md.call("speakers_get", { stem }) : null;
+  const text = data ? "" : await md.call("recording_text", { stem });
+  const countSelect = `<select id="spk-count" title="Nombre d'intervenants">
+      <option value="">Nombre : auto</option>${[2, 3, 4, 5, 6, 7, 8].map((n) => `<option value="${n}">${n} personnes</option>`).join("")}</select>`;
+  let speakersBlock;
+  if (r.diarizing != null) {
+    speakersBlock = `<div class="small muted" id="spk-progress-label">Identification des intervenants… ${Math.round(r.diarizing * 100)} %</div><div id="spk-progress">${bar(r.diarizing)}</div>`;
+  } else if (data) {
+    speakersBlock = `<div class="toolbar" style="margin:0 0 6px"><b class="grow" style="white-space:nowrap">Intervenants</b>
+        ${r.wav ? `${countSelect}<button class="btn" id="spk-run">Relancer</button>` : ""}</div>
+      <div class="names">${Object.entries(data.names).map(([k, v]) => `<label><span class="spk-dot" style="background:${color(+k)}"></span>
+        <input type="text" data-spk="${k}" value="${esc(v)}"></label>`).join("")}</div>
+      <button class="btn primary" id="spk-save">Enregistrer les noms</button>`;
+  } else if (r.wav) {
+    speakersBlock = `<div class="row" style="border:0;padding:0;margin:0"><div class="grow"><b>Intervenants</b>
+        <div class="muted small">Séparer qui parle : « Intervenant 1, 2, 3… », renommables ensuite.</div></div>
+        ${countSelect}<button class="btn primary" id="spk-run">Identifier les intervenants</button></div>`;
+  } else {
+    speakersBlock = `<div class="muted small">L'audio a été supprimé : impossible d'identifier les intervenants.</div>`;
+  }
+  const body = data
+    ? data.segments.reduce((blocks, seg) => {
+        const last = blocks[blocks.length - 1];
+        if (last && last.speaker === seg.speaker) last.texts.push(seg.text);
+        else blocks.push({ speaker: seg.speaker, start: seg.start, texts: [seg.text] });
+        return blocks;
+      }, []).map((b) => `<div class="turn"><div class="who spk" style="color:${color(b.speaker)}">${esc(data.names[b.speaker] || "Intervenant " + (b.speaker + 1))}
+          <span class="muted">${fmtClock(b.start)}</span></div><div>${esc(b.texts.join(" "))}</div></div>`).join("")
+    : esc(text);
+  const scroll = sameRecording ? $("#rec-viewer .viewer")?.scrollTop : 0;
   $("#rec-viewer").innerHTML = `<div class="card" style="margin-bottom:14px">
-    <div class="row" style="margin-bottom:10px"><b class="grow">${esc(recDate(r.stem))}</b>
+    <div class="row" style="margin-bottom:12px;border:0;padding:0"><b class="grow">${esc(recDate(r.stem))}</b>
+      <button class="btn" id="rec-close">✕</button></div>
+    <div class="toolbar">
       <button class="btn primary" id="rec-copy">Copier le texte</button>
-      <button class="btn" data-action="open" data-path="${esc(r.speakers || r.txt)}">Ouvrir</button>
+      <button class="btn" data-action="open" data-path="${esc(r.speakers_txt || r.txt)}">Ouvrir</button>
       ${r.wav ? `<button class="btn" data-action="open" data-path="${esc(r.wav)}">Écouter</button>` : ""}
       <button class="btn" data-action="reveal" data-path="${esc(r.txt)}">Finder</button>
-      <button class="btn" id="rec-close">✕</button></div>
-    <div class="viewer">${esc(text)}</div></div>`;
-  $("#rec-copy").onclick = () => copy(text);
-  $("#rec-close").onclick = () => ($("#rec-viewer").innerHTML = "");
-});
+      <span class="grow"></span>
+      ${r.wav ? `<button class="btn danger" id="rec-del-audio">Supprimer l'audio</button>` : ""}
+      <button class="btn danger" id="rec-del-all">Supprimer la réunion</button>
+    </div>
+    <div class="sep"></div>${speakersBlock}<div class="sep"></div>
+    <div class="viewer" style="${data ? "font:inherit;white-space:normal" : ""}">${body}</div></div>`;
+  $("#rec-viewer .viewer").scrollTop = scroll || 0;
+
+  $("#rec-close").onclick = closeRecording;
+  $("#rec-copy").onclick = async () => copy(await md.call("recording_text", { stem }));
+  $("#rec-del-audio")?.addEventListener("click", (e) => confirmClick(e.currentTarget, "Confirmer : supprimer l'audio", async () => {
+    renderRecordings(await md.call("recording_delete", { stem, what: "audio" }));
+    toast("Audio placé dans la Corbeille (le texte est conservé)");
+  }));
+  $("#rec-del-all").addEventListener("click", (e) => confirmClick(e.currentTarget, "Confirmer : tout supprimer", async () => {
+    renderRecordings(await md.call("recording_delete", { stem, what: "all" }));
+    toast("Réunion placée dans la Corbeille");
+  }));
+  $("#spk-run")?.addEventListener("click", async () => {
+    renderRecordings(await md.call("speakers_run", { stem, count: +$("#spk-count").value || null }));
+  });
+  $("#spk-save")?.addEventListener("click", async () => {
+    const names = {};
+    document.querySelectorAll("[data-spk]").forEach((el) => (names[el.dataset.spk] = el.value));
+    await md.call("speakers_rename", { stem, names });
+    toast("Noms enregistrés"); openRecording(stem);
+  });
+}
+function fmtClock(sec) {
+  sec = Math.floor(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return (h ? h + ":" : "") + String(m).padStart(h ? 2 : 1, "0") + ":" + String(s).padStart(2, "0");
+}
+function speakersProgress({ stem, progress }) {
+  const r = recordings.find((x) => x.stem === stem);
+  if (r) r.diarizing = progress;
+  if (openStem === stem && $("#spk-progress")) {
+    $("#spk-progress").innerHTML = bar(progress);
+    $("#spk-progress-label").textContent = `Identification des intervenants… ${Math.round(progress * 100)} %`;
+  }
+}
+function speakersDone({ stem }) { if (openStem === stem) toast("Intervenants identifiés : renommez-les ci-dessous"); }
 
 // ---- vocabulaire
 let vocab = [];

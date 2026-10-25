@@ -23,25 +23,33 @@ import objc
 import numpy as np
 import rumps
 import sounddevice as sd
-from AppKit import (NSApp, NSApplicationActivationPolicyAccessory, NSApplicationActivationPolicyRegular, NSBundle, NSEvent, NSEventMaskFlagsChanged, NSPasteboard, NSPasteboardItem,
+from AppKit import (NSApp, NSApplicationActivationPolicyAccessory, NSApplicationActivationPolicyRegular, NSBundle, NSEvent, NSEventMaskFlagsChanged, NSEventMaskKeyDown, NSPasteboard, NSPasteboardItem,
                     NSPasteboardTypeString, NSWorkspace)
 from ApplicationServices import (AXIsProcessTrusted, AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue,
                                  AXUIElementCreateApplication, AXUIElementIsAttributeSettable,
                                  AXUIElementSetAttributeValue)
 from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
+from Foundation import NSURL, NSFileManager
 from PyObjCTools.AppHelper import callAfter
 from ServiceManagement import SMAppService
 from Quartz import CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags, kCGEventFlagMaskCommand, kCGHIDEventTap
 
+import speakers
 import updates
 from ui import Window, install_edit_menu
 
 SR = 16000
 MODEL = os.environ.get("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
-# Option droite. pynput est abandonné : il appelle des API clavier hors du thread principal et macOS tue l'app.
-HOTKEY_KEYCODE = 61
-HOTKEY_FLAG = 0x40  # NX_DEVICERALTKEYMASK : Option droite enfoncée
+# Touche à maintenir pour dicter : (keyCode, masque « device-dependent » de la touche, libellé).
+# Écoutée via NSEvent : pynput appelait des API clavier hors du thread principal et macOS tuait l'app.
+HOTKEYS = {
+    "alt_r": (61, 0x40, "⌥ Option droite"),
+    "alt_l": (58, 0x20, "⌥ Option gauche"),
+    "cmd_r": (54, 0x10, "⌘ Commande droite"),
+    "ctrl_r": (62, 0x2000, "⌃ Contrôle droite"),
+    "shift_r": (60, 0x04, "⇧ Maj droite"),
+    "fn": (63, 0x800000, "fn / 🌐"),
+}
 V_KEYCODE = 9
 OUT_DIR = Path.home() / "Transcriptions"
 OUT_DIR.mkdir(exist_ok=True)
@@ -66,6 +74,8 @@ DEFAULT_SETTINGS = {
     "restore_clipboard": True,  # remettre l'ancien presse-papiers après collage
     "language": os.environ.get("WHISPER_LANG", "fr"),  # "" = détection automatique
     "dock": True,  # icône dans le Dock en plus de la barre de menus
+    "hotkey": "alt_r",  # clé de HOTKEYS
+    "speakers": True,  # séparer les intervenants à la fin d'une réunion
 }
 
 
@@ -445,51 +455,41 @@ class LongRecording:
                 self.segments.append((a, b, text))
                 f.write(f"[{fmt(a)}] {text}\n")
 
-    def label_speakers(self):
-        """Optionnel : pyannote (nécessite HF_TOKEN + conditions du modèle acceptées)."""
-        if not HF_TOKEN:
-            return None
-        from pyannote.audio import Pipeline
-
-        pipe = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=HF_TOKEN)
-        try:
-            import torch
-
-            if torch.backends.mps.is_available():
-                pipe.to(torch.device("mps"))  # GPU Apple : bien plus rapide
-        except Exception:
-            pass
-        diar = pipe(str(self.wav_path))
-        turns = [(t.start, t.end, spk) for t, _, spk in diar.itertracks(yield_label=True)]
-        out = self.txt_path.with_name(self.txt_path.stem + "_locuteurs.txt")
-        with open(out, "w", encoding="utf-8") as f:
-            for a, b, text in self.segments:
-                best, best_ov = "?", 0.0
-                for ta, tb, spk in turns:
-                    ov = min(b, tb) - max(a, ta)
-                    if ov > best_ov:
-                        best, best_ov = spk, ov
-                f.write(f"[{fmt(a)}] {best} : {text}\n")
-        return out
-
 
 # ----------------------------------------------------------------------------- réunions (pour la fenêtre)
 RECORDING_STEM = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}h\d{2}$")
 
 
-def list_recordings():
+def recording_txt(stem) -> Path:
+    if not RECORDING_STEM.match(stem):
+        raise ValueError("Nom de fichier invalide")
+    return OUT_DIR / f"{stem}.txt"
+
+
+def trash(path: Path):
+    """Corbeille plutôt que suppression définitive : on peut toujours récupérer un fichier."""
+    if path.exists():
+        ok, _, err = NSFileManager.defaultManager().trashItemAtURL_resultingItemURL_error_(
+            NSURL.fileURLWithPath_(str(path)), None, None)
+        if not ok:
+            raise RuntimeError(str(err.localizedDescription()) if err else f"Impossible de supprimer {path.name}")
+
+
+def list_recordings(diarizing=None):
+    diarizing = diarizing or {}
     out = []
     for txt in sorted(OUT_DIR.glob("*.txt"), reverse=True):
         if not RECORDING_STEM.match(txt.stem):
             continue
         wav = txt.with_suffix(".wav")
-        speakers = txt.with_name(txt.stem + "_locuteurs.txt")
+        speakers_json, speakers_txt = speakers.paths(txt)
         lines = [l for l in txt.read_text(encoding="utf-8").splitlines()[2:] if l.strip()]
         out.append({
             "stem": txt.stem,
             "txt": str(txt),
             "wav": str(wav) if wav.exists() else None,
-            "speakers": str(speakers) if speakers.exists() else None,
+            "speakers_txt": str(speakers_txt) if speakers_json.exists() else None,
+            "diarizing": diarizing.get(txt.stem),
             "duration": max(0, wav.stat().st_size - 44) / (2 * SR) if wav.exists() else None,
             "lines": len(lines),
             "preview": re.sub(r"^\[[\d:]+\]\s*", "", lines[0])[:160] if lines else "",
@@ -526,6 +526,7 @@ class App(rumps.App):
         self.status = "pret"
         self.model_ready = False
         self._monitors = []
+        self.diarizing = {}  # réunion -> avancement (0..1) de la séparation des intervenants
         self.update = None  # dernière version disponible (dict de updates.latest_release) si plus récente
         self.update_item = None
         rumps.events.before_start.register(self._on_start)
@@ -539,6 +540,8 @@ class App(rumps.App):
         self._monitors = [
             NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, self.on_flags),
             NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, self._on_local_flags),
+            NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskKeyDown, self.on_key_down),
+            NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskKeyDown, self._on_local_key_down),
         ]
         perms = permissions()
         if perms["accessibility"] != "ok":
@@ -573,6 +576,7 @@ class App(rumps.App):
             "can_restart": bundle.endswith(".app"),
             "login": login_item_enabled(),
             "version": APP_VERSION,
+            "hotkeys": {k: v[2] for k, v in HOTKEYS.items()},
             "update": self.update,
         }
 
@@ -672,13 +676,32 @@ class App(rumps.App):
             set_clipboard(args["text"])
             return True
         if action == "recordings":
-            return list_recordings()
-        if action == "recording_text":
-            if not RECORDING_STEM.match(args["stem"]):
-                raise ValueError("Nom de fichier invalide")
-            txt = OUT_DIR / f"{args['stem']}.txt"
-            speakers = OUT_DIR / f"{args['stem']}_locuteurs.txt"
-            return (speakers if speakers.exists() else txt).read_text(encoding="utf-8")
+            return list_recordings(self.diarizing)
+        if action == "recording_text":  # version avec les intervenants si elle existe (pour copier / résumer)
+            txt = recording_txt(args["stem"])
+            named = speakers.paths(txt)[1]
+            return (named if named.exists() else txt).read_text(encoding="utf-8")
+        if action == "recording_delete":  # what : "audio" (garde le texte) ou "all"
+            txt = recording_txt(args["stem"])
+            if (self.long and self.long.txt_path == txt) or args["stem"] in self.diarizing:
+                raise ValueError("Cette réunion est en cours de traitement")
+            files = [txt.with_suffix(".wav")]
+            if args["what"] == "all":
+                files += [txt, *speakers.paths(txt), txt.with_name(txt.stem + "_locuteurs.txt")]
+            for f in files:
+                trash(f)
+            return list_recordings(self.diarizing)
+        if action == "speakers_get":
+            return speakers.read(recording_txt(args["stem"]))
+        if action == "speakers_run":
+            self.run_speakers(recording_txt(args["stem"]), args.get("count") or None)
+            return list_recordings(self.diarizing)
+        if action == "speakers_rename":
+            txt = recording_txt(args["stem"])
+            data = speakers.read(txt)
+            data["names"] = {k: (v.strip() or f"Intervenant {int(k) + 1}") for k, v in args["names"].items()}
+            speakers.write(txt, data)
+            return data
         if action == "open":
             subprocess.run(["open", str(inside_out_dir(args["path"]))])
             return True
@@ -709,6 +732,8 @@ class App(rumps.App):
         if action == "setting":
             if args["key"] not in DEFAULT_SETTINGS:
                 raise ValueError("Réglage inconnu")
+            if args["key"] == "hotkey" and args["value"] not in HOTKEYS:
+                raise ValueError("Raccourci inconnu")
             SETTINGS[args["key"]] = args["value"]
             save_settings()
             self.sync_menu()
@@ -751,12 +776,24 @@ class App(rumps.App):
 
     # --- dictée
     def on_flags(self, event):
-        if event.keyCode() != HOTKEY_KEYCODE:
+        keycode, flag, _ = HOTKEYS.get(SETTINGS["hotkey"], HOTKEYS["alt_r"])
+        if event.keyCode() != keycode:
             return
-        if event.modifierFlags() & HOTKEY_FLAG:
+        if event.modifierFlags() & flag:
             self.on_press()
         else:
             self.on_release()
+
+    def on_key_down(self, event):
+        # touche tapée pendant que le raccourci est maintenu (ex. ⌥ + e pour un caractère) : ce n'est pas une dictée
+        if self.dictating:
+            self.dictating = False
+            self.dictation.stop()
+            self.set_status("pret")
+
+    def _on_local_key_down(self, event):
+        self.on_key_down(event)
+        return event
 
     def _on_local_flags(self, event):
         self.on_flags(event)  # quand la fenêtre MacDictée a le focus, le moniteur global ne voit rien
@@ -867,15 +904,42 @@ class App(rumps.App):
     def _finish_long(self, rec):
         try:
             rec.stop()
-            out = None
-            try:
-                out = rec.label_speakers()
-            except Exception as e:  # la diarisation est facultative
-                notify("MacDictée", "Locuteurs non identifiés", str(e)[:200])
-            notify("MacDictée", "Transcription terminée", str(out or rec.txt_path))
         finally:
             self.set_status("pret")
-            self.window.emit("recordings", list_recordings())
+            self.window.emit("recordings", list_recordings(self.diarizing))
+        if SETTINGS["speakers"] and rec.segments:
+            self.run_speakers(rec.txt_path)
+        else:
+            notify("MacDictée", "Transcription terminée", rec.txt_path.name)
+
+    # --- intervenants
+    def run_speakers(self, txt, count=None):
+        stem = txt.stem
+        if stem in self.diarizing:
+            return
+        if not txt.with_suffix(".wav").exists():
+            raise ValueError("L'audio de cette réunion a été supprimé")
+        self.diarizing[stem] = 0.0
+        threading.Thread(target=self._speakers_worker, args=(txt, count), daemon=True).start()
+
+    def _speakers_worker(self, txt, count):
+        stem, last = txt.stem, [0.0]
+
+        def progress(fraction):
+            if fraction - last[0] >= 0.02:
+                last[0] = fraction
+                self.diarizing[stem] = fraction
+                self.window.emit("speakers_progress", {"stem": stem, "progress": fraction})
+
+        try:
+            data = speakers.run(txt, txt.with_suffix(".wav"), count, progress)
+            notify("MacDictée", "Réunion prête", f"{len(data['names'])} intervenant(s) identifié(s) : renommez-les dans MacDictée.")
+        except Exception as e:
+            notify("MacDictée", "Intervenants non identifiés", str(e)[:200])
+        finally:
+            self.diarizing.pop(stem, None)
+            self.window.emit("recordings", list_recordings(self.diarizing))
+            self.window.emit("speakers_done", {"stem": stem})
 
 
 def _reopen(delegate, app, has_visible_windows):
@@ -895,6 +959,8 @@ def self_test(wav_path):
     with wave.open(wav_path) as w:
         audio = np.frombuffer(w.readframes(w.getnframes()), dtype="int16").astype("float32") / 32768.0
     print("SELFTEST:", transcribe(audio)["text"], flush=True)
+    speakers.ensure_models()
+    print("SELFTEST intervenants :", len({s for _, _, s in speakers.diarize(audio)}), flush=True)
     try:
         print("SELFTEST mise à jour :", APP_VERSION, "->", updates.latest_release()["version"], flush=True)
     except Exception as e:  # pas encore de version publiée, hors ligne…

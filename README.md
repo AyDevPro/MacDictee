@@ -17,7 +17,7 @@ Nécessite un Mac Apple Silicon (M1 ou plus récent), macOS 13 ou plus récent.
 ./build.sh     # -> dist/MacDictee-x.y.z.dmg (app autonome, Python inclus)
 ```
 
-Version : `VERSION` dans `setup.py`. Sans compte développeur Apple, l'app est signée « ad hoc » : chaque nouvelle version oblige à redonner l'autorisation Accessibilité. Avec un compte (99 $/an), `SIGN_ID="Developer ID Application: …" NOTARY_PROFILE=… ./build.sh` signe et notarise (plus d'avertissement au premier lancement, autorisations conservées entre les versions). L'identification des locuteurs (pyannote/torch) n'est pas incluse dans l'app autonome.
+Version : `VERSION` dans `setup.py`. Sans compte développeur Apple, l'app est signée « ad hoc » : chaque nouvelle version oblige à redonner l'autorisation Accessibilité. Avec un compte (99 $/an), `SIGN_ID="Developer ID Application: …" NOTARY_PROFILE=… ./build.sh` signe et notarise (plus d'avertissement au premier lancement, autorisations conservées entre les versions).
 
 ## Mises à jour
 
@@ -35,7 +35,7 @@ Publier une version (développeurs) :
 ```bash
 cd ~/Dev/MacDictee   # sur le disque interne : l'app pointe vers ce dossier
 chmod +x install.sh
-./install.sh              # ou ./install.sh --locuteurs pour l'identification des personnes
+./install.sh
 ```
 
 Puis ouvrez `~/Applications/MacDictée.app`. Une icône 🎙 apparaît dans la barre de menus.
@@ -50,7 +50,7 @@ La fenêtre *Ouvrir MacDictée…* (menu 🎙) montre l'état des autorisations,
 
 ## Utilisation
 
-**Dictée rapide (comme Wispr Flow)** : maintenez la touche **Option droite**, parlez, relâchez.
+**Dictée rapide (comme Wispr Flow)** : maintenez la touche de dictée (**Option droite** par défaut, modifiable dans Réglages : Option gauche, Commande droite, Contrôle droite, Maj droite ou fn/🌐), parlez, relâchez. Si vous tapez une autre touche pendant qu'elle est maintenue (⌥ + e pour un caractère, par exemple), la dictée est annulée.
 - Si le curseur est dans un champ de texte : le texte est collé.
 - Si aucun champ de texte n'est actif : le texte est seulement copié, vous recevez une notification et vous collez où vous voulez avec Cmd+V.
 - Après un collage, votre presse-papiers précédent est remis en place (comme Wispr Flow). Option désactivable dans le menu 🎙 (*Remettre le presse-papiers après collage*) pour garder le texte dicté.
@@ -62,22 +62,15 @@ La fenêtre *Ouvrir MacDictée…* (menu 🎙) montre l'état des autorisations,
 - Seuls les remplacements de mots comptent (une reformulation complète est ignorée).
 - Ça marche dans les champs dont l'app expose le texte (Notes, Mail, Messages, Slack, champs web classiques…). Dans certains éditeurs (Google Docs, par exemple), la correction n'est pas visible : pas d'apprentissage, mais le reste fonctionne.
 
-**Compte rendu avec Claude** : à la fin d'une réunion, glissez le fichier `~/Transcriptions/...txt` (ou `..._locuteurs.txt` si activé) dans Claude et demandez un compte rendu.
+**Compte rendu avec Claude** : à la fin d'une réunion, glissez le fichier `~/Transcriptions/..._intervenants.txt` (ou `...txt`) dans Claude et demandez un compte rendu. Le bouton *Copier le texte* de la fenêtre copie la version avec les intervenants.
 
 **Enregistrement long (réunions, conversations)** : menu 🎙 > *Démarrer l'enregistrement long*.
 - L'audio est sauvegardé en continu, donc aucune limite de durée.
 - La transcription se construit au fil de l'eau dans `~/Transcriptions/AAAA-MM-JJ_HHhMM.txt`, avec des horodatages. Les blocs sont coupés sur les silences pour ne pas couper les phrases.
-- À l'arrêt, si l'identification des locuteurs est activée, un second fichier `..._locuteurs.txt` est créé (SPEAKER_00, SPEAKER_01…).
+- À l'arrêt, les intervenants sont séparés automatiquement (« Intervenant 1, 2, 3… », réglage désactivable) : renommez-les dans la fenêtre, onglet Réunions. Si le nombre détecté est faux, relancez en indiquant le nombre de personnes. Fichiers : `..._intervenants.txt` (lisible) et `..._intervenants.json`. Les modèles (~35 Mo, sherpa-onnx) se téléchargent la première fois dans `~/Library/Application Support/MacDictee/modeles`.
+- Onglet Réunions : *Supprimer l'audio* (garde le texte, utile une fois le résumé fait) ou *Supprimer la réunion* (audio + textes). Les fichiers vont à la Corbeille.
 
 Attention : seul le **micro** est enregistré. Pour capter aussi l'autre côté d'un appel (Zoom, Teams, Meet), il faut un périphérique audio virtuel type BlackHole, à choisir comme entrée.
-
-## Identification des locuteurs (optionnel)
-
-1. Installez avec `./install.sh --locuteurs`
-2. Créez un compte gratuit sur huggingface.co et acceptez les conditions de `pyannote/speaker-diarization-3.1` et `pyannote/segmentation-3.0`
-3. Créez un token d'accès et lancez l'app avec : `HF_TOKEN=hf_xxx open ~/Applications/MacDictée.app`
-
-Les locuteurs sont séparés mais pas nommés.
 
 ## Réglages
 

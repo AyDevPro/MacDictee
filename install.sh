@@ -16,10 +16,6 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Option : identification des locuteurs
-if [ "$1" = "--locuteurs" ]; then
-  pip install pyannote.audio
-fi
 
 # Construit MacDictée.app (mode alias = rapide, utilise le venv du dossier)
 python setup.py py2app -A
