@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MacDictée</title>
+<style>
+:root {
+  --bg: #f5f5f7; --panel: #ffffff; --side: #ececef; --text: #1d1d1f; --muted: #6e6e73;
+  --line: #e2e2e6; --accent: #0a66ff; --accent-soft: #e6efff; --red: #e5383b; --red-soft: #fde8e8;
+  --green: #1f9d55; --green-soft: #e3f5ea; --amber: #b7791f; --amber-soft: #fdf3e1;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1e; --panel: #2c2c2e; --side: #232325; --text: #f5f5f7; --muted: #a1a1a6;
+    --line: #3a3a3c; --accent: #4c8dff; --accent-soft: #1f2d4a; --red: #ff5a5f; --red-soft: #3d2324;
+    --green: #3ccf7a; --green-soft: #1d3527; --amber: #f0b44c; --amber-soft: #3a2f1c;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  background: var(--bg); color: var(--text); display: flex; -webkit-user-select: none; user-select: none;
+}
+nav { width: 200px; background: var(--side); border-right: 1px solid var(--line); padding: 18px 10px; flex-shrink: 0; }
+nav .brand { font-weight: 700; font-size: 15px; padding: 0 10px 14px; display: flex; align-items: center; gap: 8px; }
+nav .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); }
+nav .dot.ecoute, nav .dot.reunion { background: var(--red); animation: pulse 1s infinite; }
+nav .dot.transcription { background: var(--amber); }
+@keyframes pulse { 50% { opacity: .35; } }
+nav button {
+  display: flex; justify-content: space-between; width: 100%; text-align: left; border: 0; background: none;
+  color: var(--text); font: inherit; padding: 7px 10px; border-radius: 7px; cursor: default;
+}
+nav button:hover { background: rgba(127,127,127,.12); }
+nav button.active { background: var(--accent); color: #fff; }
+nav .badge { font-size: 11px; opacity: .7; }
+main { flex: 1; overflow-y: auto; padding: 26px 32px 40px; }
+section { display: none; max-width: 760px; }
+section.active { display: block; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 0 0 20px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 26px 0 8px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+.card + .card { margin-top: 10px; }
+.row { display: flex; align-items: center; gap: 12px; }
+.row + .row { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.grow { flex: 1; min-width: 0; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.pill { display: inline-block; padding: 2px 9px; border-radius: 99px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pill.ok { background: var(--green-soft); color: var(--green); }
+.pill.ko { background: var(--red-soft); color: var(--red); }
+.pill.wait { background: var(--amber-soft); color: var(--amber); }
+button.btn {
+  font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  padding: 5px 12px; border-radius: 7px; cursor: default; white-space: nowrap;
+}
+button.btn:hover { border-color: var(--muted); }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.btn.danger { color: var(--red); }
+button.btn.big { padding: 10px 20px; font-size: 14px; font-weight: 600; border-radius: 10px; }
+button.btn.rec { background: var(--red); border-color: var(--red); color: #fff; }
+.hero { display: flex; align-items: center; gap: 18px; }
+.hero .icon { font-size: 34px; width: 56px; height: 56px; display: grid; place-items: center; border-radius: 14px; background: var(--accent-soft); }
+.hero .state { font-size: 18px; font-weight: 700; }
+kbd { font: 600 12px -apple-system, sans-serif; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; background: var(--panel); }
+.empty { color: var(--muted); text-align: center; padding: 28px 10px; }
+.item { padding: 12px 0; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: flex-start; }
+.item:last-child { border-bottom: 0; }
+.item .text { -webkit-user-select: text; user-select: text; white-space: pre-wrap; word-break: break-word; }
+.item .meta { color: var(--muted); font-size: 11.5px; margin-bottom: 3px; }
+.item .actions { visibility: hidden; display: flex; gap: 6px; }
+.item:hover .actions { visibility: visible; }
+input[type=text], select {
+  font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 7px; padding: 6px 10px; outline: none;
+}
+input[type=text]:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+input[type=text] { -webkit-user-select: text; user-select: text; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; background: var(--accent-soft); color: var(--accent); padding: 4px 6px 4px 10px; border-radius: 99px; font-weight: 500; }
+.chip button { border: 0; background: none; color: inherit; font-size: 14px; line-height: 1; padding: 0 3px; cursor: default; opacity: .7; }
+.chip button:hover { opacity: 1; }
+table { width: 100%; border-collapse: collapse; }
+td, th { text-align: left; padding: 9px 6px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+tr:last-child td { border-bottom: 0; }
+.switch { position: relative; width: 38px; height: 22px; flex-shrink: 0; }
+.switch input { display: none; }
+.switch span { position: absolute; inset: 0; background: var(--line); border-radius: 99px; transition: .15s; }
+.switch span::after { content: ""; position: absolute; width: 18px; height: 18px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: .15s; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.switch input:checked + span { background: var(--green); }
+.switch input:checked + span::after { transform: translateX(16px); }
+.rec-item { cursor: default; }
+.rec-item:hover { background: rgba(127,127,127,.06); }
+.viewer { white-space: pre-wrap; -webkit-user-select: text; user-select: text; font: 12.5px/1.6 ui-monospace, "SF Mono", Menlo, monospace; max-height: 52vh; overflow-y: auto; }
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(20px); opacity: 0; background: var(--text); color: var(--bg); padding: 7px 14px; border-radius: 8px; transition: .2s; pointer-events: none; }
+.toast.show { opacity: 1; transform: translateX(-50%); }
+.alert { background: var(--amber-soft); color: var(--text); border-color: transparent; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="brand"><span class="dot" id="nav-dot"></span>MacDictée</div>
+  <button data-tab="accueil" class="active">Accueil</button>
+  <button data-tab="historique">Historique <span class="badge" id="badge-hist"></span></button>
+  <button data-tab="reunions">Réunions <span class="badge" id="badge-rec"></span></button>
+  <button data-tab="vocabulaire">Vocabulaire <span class="badge" id="badge-vocab"></span></button>
+  <button data-tab="appris">Mots appris <span class="badge" id="badge-rules"></span></button>
+  <button data-tab="reglages">Réglages</button>
+</nav>
+<main>
+  <!-- ACCUEIL -->
+  <section id="accueil" class="active">
+    <h1>Bonjour 👋</h1>
+    <p class="sub">Maintenez <kbd>⌥ Option droite</kbd>, parlez, relâchez. Le texte est collé là où se trouve votre curseur.</p>
+    <div class="card hero">
+      <div class="icon" id="hero-icon">🎙</div>
+      <div class="grow">
+        <div class="state" id="hero-state">…</div>
+        <div class="muted small" id="hero-detail"></div>
+      </div>
+      <button class="btn big" id="hero-long">Enregistrer une réunion</button>
+    </div>
+    <div id="perm-alert"></div>
+    <h2>Autorisations</h2>
+    <div class="card" id="perms"></div>
+    <h2>Dernière dictée</h2>
+    <div class="card" id="last-dictation"></div>
+  </section>
+
+  <!-- HISTORIQUE -->
+  <section id="historique">
+    <div class="row" style="margin-bottom:14px">
+      <div class="grow"><h1>Historique</h1><p class="sub" style="margin:0">Vos 200 dernières dictées. Survolez une ligne pour la recopier.</p></div>
+      <input type="text" id="hist-search" placeholder="Rechercher…" style="width:200px">
+      <button class="btn danger" id="hist-clear">Tout effacer</button>
+    </div>
+    <div class="card" id="hist-list"></div>
+  </section>
+
+  <!-- REUNIONS -->
+  <section id="reunions">
+    <div class="row" style="margin-bottom:14px">
+      <div class="grow"><h1>Réunions</h1><p class="sub" style="margin:0">Enregistrements longs, transcrits au fil de l'eau dans votre dossier Transcriptions.</p></div>
+      <button class="btn big" id="rec-long">Démarrer</button>
+    </div>
+    <div class="card alert small" style="margin-bottom:14px">Seul le micro est enregistré pour l'instant : en visio, la voix des autres n'est captée que si elle sort de vos haut-parleurs.</div>
+    <div id="rec-viewer"></div>
+    <div class="card" id="rec-list"></div>
+  </section>
+
+  <!-- VOCABULAIRE -->
+  <section id="vocabulaire">
+    <h1>Vocabulaire</h1>
+    <p class="sub">Noms propres, marques, jargon : Whisper les écrira correctement.</p>
+    <div class="card">
+      <form class="row" id="vocab-form" style="margin-bottom:14px">
+        <input type="text" id="vocab-input" class="grow" placeholder="Ajouter un mot ou un nom (Entrée pour valider)">
+        <button class="btn primary" type="submit">Ajouter</button>
+      </form>
+      <div class="chips" id="vocab-list"></div>
+    </div>
+  </section>
+
+  <!-- MOTS APPRIS -->
+  <section id="appris">
+    <h1>Mots appris</h1>
+    <p class="sub">Quand vous corrigez deux fois le même mot après une dictée, MacDictée le remplace automatiquement ensuite.</p>
+    <div class="card" id="rules-list"></div>
+  </section>
+
+  <!-- REGLAGES -->
+  <section id="reglages">
+    <h1>Réglages</h1>
+    <p class="sub">Enregistrés automatiquement.</p>
+    <div class="card">
+      <div class="row">
+        <div class="grow"><b>Coller automatiquement</b><div class="muted small">Sinon le texte est seulement copié dans le presse-papiers.</div></div>
+        <label class="switch"><input type="checkbox" data-setting="paste"><span></span></label>
+      </div>
+      <div class="row">
+        <div class="grow"><b>Remettre le presse-papiers après collage</b><div class="muted small">Ce que vous aviez copié avant la dictée est restauré.</div></div>
+        <label class="switch"><input type="checkbox" data-setting="restore_clipboard"><span></span></label>
+      </div>
+      <div class="row">
+        <div class="grow"><b>Langue</b><div class="muted small">« Automatique » détecte la langue, mais un peu moins fiable sur les phrases courtes.</div></div>
+        <select data-setting="language">
+          <option value="fr">Français</option><option value="en">Anglais</option>
+          <option value="es">Espagnol</option><option value="de">Allemand</option><option value="it">Italien</option>
+          <option value="">Automatique</option>
+        </select>
+      </div>
+    </div>
+    <h2>Informations</h2>
+    <div class="card">
+      <div class="row"><div class="grow">Raccourci</div><kbd>⌥ Option droite</kbd> <span class="muted small">(maintenir)</span></div>
+      <div class="row"><div class="grow">Modèle</div><span class="muted small" id="info-model"></span></div>
+      <div class="row"><div class="grow">Dossier</div><span class="muted small" id="info-dir"></span><button class="btn" data-action="open_folder">Ouvrir</button></div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// ---- pont Python
+const md = {
+  _id: 0, _pending: {},
+  call(action, args = {}) {
+    return new Promise((resolve, reject) => {
+      const id = ++this._id;
+      this._pending[id] = { resolve, reject };
+      window.webkit.messageHandlers.md.postMessage(JSON.stringify({ id, action, args }));
+    });
+  },
+  _reply(id, ok, data) {
+    const p = this._pending[id]; delete this._pending[id];
+    if (!p) return;
+    ok ? p.resolve(data) : (toast("Erreur : " + data), p.reject(data));
+  },
+  onEvent(name, data) {
+    if (name === "state") renderState(data);
+    if (name === "history") renderHistory(data);
+    if (name === "recordings") renderRecordings(data);
+  },
+};
+window.md = md;
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 1800);
+}
+async function copy(text) { await md.call("copy", { text }); toast("Copié dans le presse-papiers"); }
+
+// ---- navigation
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+function showTab(tab) {
+  document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  document.querySelectorAll("section").forEach((s) => s.classList.toggle("active", s.id === tab));
+  if (tab === "reunions") loadRecordings();
+}
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-action]");
+  if (a) md.call(a.dataset.action, a.dataset.path ? { path: a.dataset.path } : {});
+});
+
+// ---- état
+let state = null, timer = null;
+const STATES = {
+  pret: ["🎙", "Prêt", "Maintenez ⌥ droite pour dicter."],
+  ecoute: ["🔴", "Je vous écoute…", "Relâchez la touche pour transcrire."],
+  transcription: ["⏳", "Transcription…", "Quelques instants."],
+  reunion: ["🔴", "Réunion en cours", ""],
+};
+function fmtDur(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return h ? `${h} h ${String(m).padStart(2, "0")}` : m ? `${m} min ${String(s).padStart(2, "0")}` : `${s} s`;
+}
+function renderState(s) {
+  state = s;
+  const [icon, title, detail] = STATES[s.status] || STATES.pret;
+  $("#nav-dot").className = "dot " + s.status;
+  $("#hero-icon").textContent = icon;
+  $("#hero-state").textContent = s.model_ready || s.status !== "pret" ? title : "Chargement du modèle…";
+  $("#hero-detail").textContent = s.model_ready || s.status !== "pret" ? detail : "La première fois, ça peut prendre une minute.";
+  for (const id of ["#hero-long", "#rec-long"]) {
+    const b = $(id);
+    b.textContent = s.long ? "■ Arrêter l'enregistrement" : (id === "#hero-long" ? "Enregistrer une réunion" : "● Démarrer");
+    b.classList.toggle("rec", !!s.long);
+    b.disabled = !s.long && s.status !== "pret";
+  }
+  clearInterval(timer);
+  if (s.long) {
+    const since = new Date(s.long.since);
+    const tick = () => { $("#hero-detail").textContent = "Enregistrement depuis " + fmtDur((Date.now() - since) / 1000); };
+    tick(); timer = setInterval(tick, 1000);
+  }
+
+  const P = s.permissions;
+  const perm = (key, what, name, why) => {
+    const ok = P[key] === "ok";
+    return `<div class="row"><div class="grow"><b>${name}</b><div class="muted small">${why}</div></div>
+      <span class="pill ${ok ? "ok" : P[key] === "inconnu" ? "wait" : "ko"}">${ok ? "Autorisé" : P[key] === "inconnu" ? "À demander" : "Non autorisé"}</span>
+      ${ok ? "" : `<button class="btn primary" onclick="md.call('privacy',{what:'${what}'})">Autoriser…</button>`}</div>`;
+  };
+  $("#perms").innerHTML =
+    perm("micro", "Microphone", "Microphone", "Pour enregistrer votre voix.") +
+    perm("accessibility", "Accessibility", "Accessibilité", "Pour détecter la touche ⌥ droite et coller le texte.") +
+    (s.can_restart ? `<div class="row"><div class="grow muted small">Vous venez d'accorder une autorisation ? Relancez l'app pour qu'elle soit prise en compte.</div>
+      <button class="btn" onclick="md.call('restart')">Relancer MacDictée</button></div>` : "");
+  $("#perm-alert").innerHTML = P.accessibility === "ok" && P.micro === "ok" ? "" :
+    `<div class="card alert" style="margin-top:12px">⚠️ La dictée ne peut pas fonctionner tant que les autorisations ci-dessous ne sont pas accordées.
+     Dans Réglages Système, cochez <b>MacDictée</b>, puis cliquez sur <b>Relancer MacDictée</b>.</div>`;
+
+  document.querySelectorAll("[data-setting]").forEach((el) => {
+    const v = s.settings[el.dataset.setting];
+    el.type === "checkbox" ? (el.checked = !!v) : (el.value = v);
+  });
+  $("#info-model").textContent = s.model.replace("mlx-community/", "");
+  $("#info-dir").textContent = s.out_dir.replace(/^\/Users\/[^/]+/, "~");
+}
+$("#hero-long").addEventListener("click", toggleLong);
+$("#rec-long").addEventListener("click", toggleLong);
+async function toggleLong() { renderState(await md.call("toggle_long")); loadRecordings(); }
+document.querySelectorAll("[data-setting]").forEach((el) => el.addEventListener("change", async () => {
+  const value = el.type === "checkbox" ? el.checked : el.value;
+  renderState(await md.call("setting", { key: el.dataset.setting, value }));
+  toast("Réglage enregistré");
+}));
+
+// ---- historique
+let history = [];
+function when(iso) {
+  const d = new Date(iso), now = new Date();
+  const time = d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return "Aujourd'hui " + time;
+  const y = new Date(now); y.setDate(now.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return "Hier " + time;
+  return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) + " " + time;
+}
+function historyItem(h, i) {
+  return `<div class="item"><div class="grow"><div class="meta">${esc(when(h.time))}${h.app ? " · " + esc(h.app) : ""}</div>
+    <div class="text">${esc(h.text)}</div></div>
+    <div class="actions"><button class="btn" data-copy="${i}">Copier</button></div></div>`;
+}
+function renderHistory(items) {
+  history = items;
+  $("#badge-hist").textContent = items.length || "";
+  const q = $("#hist-search").value.trim().toLowerCase();
+  const shown = items.map((h, i) => [h, i]).filter(([h]) => !q || h.text.toLowerCase().includes(q));
+  $("#hist-list").innerHTML = shown.length ? shown.map(([h, i]) => historyItem(h, i)).join("")
+    : `<div class="empty">${q ? "Aucun résultat." : "Aucune dictée pour l'instant. Maintenez ⌥ droite et parlez !"}</div>`;
+  $("#last-dictation").innerHTML = items.length ? historyItem(items[0], 0).replace('class="item"', 'class="item" style="padding:0"')
+    : `<div class="empty" style="padding:8px">Rien encore.</div>`;
+}
+document.addEventListener("click", (e) => { const b = e.target.closest("[data-copy]"); if (b) copy(history[+b.dataset.copy].text); });
+$("#hist-search").addEventListener("input", () => renderHistory(history));
+$("#hist-clear").addEventListener("click", async (e) => {
+  // pas de confirm() dans un WKWebView : on demande un second clic
+  const b = e.currentTarget;
+  if (!history.length) return;
+  if (!b.dataset.armed) {
+    b.dataset.armed = "1"; b.textContent = "Confirmer l'effacement";
+    setTimeout(() => { delete b.dataset.armed; b.textContent = "Tout effacer"; }, 3000);
+    return;
+  }
+  delete b.dataset.armed; b.textContent = "Tout effacer";
+  renderHistory(await md.call("history_clear"));
+});
+
+// ---- réunions
+let recordings = [];
+async function loadRecordings() { renderRecordings(await md.call("recordings")); }
+function recDate(stem) {
+  const [d, t] = stem.split("_"), [y, m, day] = d.split("-");
+  return new Date(+y, m - 1, +day).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }) + " à " + t;
+}
+function renderRecordings(items) {
+  recordings = items;
+  $("#badge-rec").textContent = items.length || "";
+  $("#rec-list").innerHTML = items.length ? items.map((r, i) => `
+    <div class="item rec-item" data-rec="${i}"><div class="grow">
+      <div class="meta">${esc(recDate(r.stem))}${r.duration != null ? " · " + fmtDur(r.duration) : ""}${r.speakers ? " · locuteurs identifiés" : ""}</div>
+      <div class="text">${r.preview ? esc(r.preview) + (r.lines > 1 ? "…" : "") : '<span class="muted">(pas de texte transcrit)</span>'}</div></div>
+      <button class="btn">Lire</button></div>`).join("")
+    : `<div class="empty">Aucune réunion enregistrée.</div>`;
+}
+document.addEventListener("click", async (e) => {
+  const el = e.target.closest("[data-rec]");
+  if (!el) return;
+  const r = recordings[+el.dataset.rec];
+  const text = await md.call("recording_text", { stem: r.stem });
+  $("#rec-viewer").innerHTML = `<div class="card" style="margin-bottom:14px">
+    <div class="row" style="margin-bottom:10px"><b class="grow">${esc(recDate(r.stem))}</b>
+      <button class="btn primary" id="rec-copy">Copier le texte</button>
+      <button class="btn" data-action="open" data-path="${esc(r.speakers || r.txt)}">Ouvrir</button>
+      ${r.wav ? `<button class="btn" data-action="open" data-path="${esc(r.wav)}">Écouter</button>` : ""}
+      <button class="btn" data-action="reveal" data-path="${esc(r.txt)}">Finder</button>
+      <button class="btn" id="rec-close">✕</button></div>
+    <div class="viewer">${esc(text)}</div></div>`;
+  $("#rec-copy").onclick = () => copy(text);
+  $("#rec-close").onclick = () => ($("#rec-viewer").innerHTML = "");
+});
+
+// ---- vocabulaire
+let vocab = [];
+function renderVocab(words) {
+  vocab = words;
+  $("#badge-vocab").textContent = words.length || "";
+  $("#vocab-list").innerHTML = words.length ? words.map((w, i) => `<span class="chip">${esc(w)}<button data-unvocab="${i}" title="Retirer">×</button></span>`).join("")
+    : `<div class="empty" style="width:100%">Aucun mot. Ajoutez par exemple les prénoms de vos collègues.</div>`;
+}
+$("#vocab-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const w = $("#vocab-input").value.trim();
+  if (!w) return;
+  renderVocab(await md.call("vocab_set", { words: [...vocab, w] }));
+  $("#vocab-input").value = "";
+});
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-unvocab]");
+  if (b) renderVocab(await md.call("vocab_set", { words: vocab.filter((_, i) => i !== +b.dataset.unvocab) }));
+});
+
+// ---- mots appris
+function renderRules(rules) {
+  const entries = Object.entries(rules);
+  $("#badge-rules").textContent = entries.length || "";
+  $("#rules-list").innerHTML = entries.length ? `<table><tr><th>Whisper écrivait</th><th>Remplacé par</th><th></th></tr>` +
+    entries.map(([w, r]) => `<tr><td class="muted">${esc(w)}</td><td><b>${esc(r)}</b></td>
+      <td style="text-align:right"><button class="btn danger" data-unrule="${esc(w)}">Oublier</button></td></tr>`).join("") + `</table>`
+    : `<div class="empty">Aucun mot appris pour l'instant.<br>Corrigez un mot juste après une dictée : à la deuxième fois, il est retenu.</div>`;
+}
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-unrule]");
+  if (b) renderRules(await md.call("rule_delete", { wrong: b.dataset.unrule }));
+});
+
+// ---- démarrage + rafraîchissement (autorisations, nouveaux mots appris…)
+async function refresh() {
+  const [s, h, v, r] = await Promise.all([md.call("state"), md.call("history"), md.call("vocab"), md.call("rules")]);
+  renderState(s); renderHistory(h); renderVocab(v); renderRules(r);
+}
+refresh(); loadRecordings();
+setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 4000);
+</script>
+</body>
+</html>

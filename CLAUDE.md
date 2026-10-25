@@ -7,7 +7,8 @@ Projet installé dans `~/Dev/MacDictee` (disque interne, venv Python 3.12) : l'a
 Tout le code a été rédigé depuis un environnement Linux. Seuls la syntaxe et la logique pure d'apprentissage (`learn_from_edit`, `apply_rules`) ont été testées (avec des modules macOS simulés). **Premier objectif : lancer `python app.py` sur le Mac, corriger tout ce qui casse, puis vérifier chaque fonction ci-dessous à la main.**
 
 ## Ce qui existe (`app.py`)
-- **Dictée** : touche Option droite maintenue -> enregistrement -> transcription (mlx-whisper, `whisper-large-v3-turbo`) -> collage via Cmd+V.
+- **Fenêtre** (`ui.py` + `ui/index.html`) : WKWebView, pont JS -> `App.handle(action, args)`, événements Python -> `md.onEvent`. Réglages persistants dans `~/Transcriptions/reglages.json`, historique dans `historique.json`.
+- **Dictée** : touche Option droite maintenue (moniteur `NSEvent` sur le thread principal ; pynput retiré car il plantait l'app sous macOS 27 en appelant TSM hors du thread principal) -> enregistrement -> transcription (mlx-whisper, `whisper-large-v3-turbo`) -> collage via Cmd+V.
 - **Champ actif** : détection via l'API Accessibilité (`AXFocusedUIElement`, rôle / `AXValue` modifiable / `AXSelectedTextRange`). Si aucun champ de texte : on copie seulement dans le presse-papiers + notification. Après un collage, l'ancien presse-papiers est restauré (option de menu) ; sans collage, le texte reste dans le presse-papiers. Les mises à jour d'interface depuis les threads passent par `notify()` / `set_title()` (thread principal via `callAfter`). `AXManualAccessibility` est activé pour Chrome/Electron.
 - **Enregistrement long** : WAV écrit en continu dans `~/Transcriptions`, transcription par blocs de 20 à 45 s coupés sur les silences (RMS), fichier `.txt` horodaté au fil de l'eau.
 - **Locuteurs (optionnel)** : pyannote 3.1 après coup (`HF_TOKEN`), fichier `_locuteurs.txt`.
@@ -30,7 +31,7 @@ Objectif : comme le Notetaker de Wispr Flow (sans bot dans l'appel). Aujourd'hui
 5. Si le projet grossit : réécriture en app Swift native (distribution plus simple, permissions plus fiables qu'avec py2app).
 
 ## Pièges connus
-- Permissions macOS liées à l'app/au binaire : Microphone, Accessibilité, Surveillance de l'entrée (pynput). En mode `py2app -A` (alias) ou en lançant `python app.py` depuis le Terminal, la permission peut s'attacher au Terminal ou à Python plutôt qu'à l'app.
+- Permissions macOS liées à l'app/au binaire : Microphone, Accessibilité, (Surveillance de l'entrée n'est plus nécessaire). En mode `py2app -A` (alias) ou en lançant `python app.py` depuis le Terminal, la permission peut s'attacher au Terminal ou à Python plutôt qu'à l'app.
 - `AXValue` n'est pas exposé partout (Google Docs, certains éditeurs web) : l'apprentissage est alors impossible, le reste fonctionne.
 - MLX ne doit pas être appelé en parallèle : tout passe par `_model_lock`.
 

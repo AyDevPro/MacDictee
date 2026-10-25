@@ -4,6 +4,7 @@
     * curseur dans un champ de texte  -> le texte est collé (et reste dans le presse-papiers)
     * pas de champ de texte actif     -> le texte est seulement copié dans le presse-papiers
 - Mode réunion : menu de la barre > "Démarrer l'enregistrement long".
+- Fenêtre « Ouvrir MacDictée… » : état, historique, réunions, vocabulaire, mots appris, réglages.
 """
 import datetime
 import difflib
@@ -21,19 +22,71 @@ import mlx_whisper
 import numpy as np
 import rumps
 import sounddevice as sd
-from AppKit import NSPasteboard, NSPasteboardItem, NSWorkspace
-from ApplicationServices import (AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
-                                 AXUIElementIsAttributeSettable, AXUIElementSetAttributeValue)
-from pynput import keyboard
+from AppKit import NSBundle, NSEvent, NSEventMaskFlagsChanged, NSPasteboard, NSPasteboardItem, NSWorkspace
+from ApplicationServices import (AXIsProcessTrusted, AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue,
+                                 AXUIElementCreateApplication, AXUIElementIsAttributeSettable,
+                                 AXUIElementSetAttributeValue)
+from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
 from PyObjCTools.AppHelper import callAfter
+from Quartz import CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags, kCGEventFlagMaskCommand, kCGHIDEventTap
+
+from ui import Window
 
 SR = 16000
 MODEL = os.environ.get("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
-LANG = os.environ.get("WHISPER_LANG", "fr")  # "" = détection automatique
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
-HOTKEY = keyboard.Key.alt_r
+# Option droite. pynput est abandonné : il appelle des API clavier hors du thread principal et macOS tue l'app.
+HOTKEY_KEYCODE = 61
+HOTKEY_FLAG = 0x40  # NX_DEVICERALTKEYMASK : Option droite enfoncée
+V_KEYCODE = 9
 OUT_DIR = Path.home() / "Transcriptions"
 OUT_DIR.mkdir(exist_ok=True)
+
+SETTINGS_FILE = OUT_DIR / "reglages.json"
+DEFAULT_SETTINGS = {
+    "paste": True,  # coller dans le champ de texte actif
+    "restore_clipboard": True,  # remettre l'ancien presse-papiers après collage
+    "language": os.environ.get("WHISPER_LANG", "fr"),  # "" = détection automatique
+}
+
+
+def load_settings():
+    try:
+        saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        saved = {}
+    return {k: saved.get(k, v) for k, v in DEFAULT_SETTINGS.items()}
+
+
+SETTINGS = load_settings()
+
+
+def save_settings():
+    SETTINGS_FILE.write_text(json.dumps(SETTINGS, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+HISTORY_FILE = OUT_DIR / "historique.json"
+HISTORY_MAX = 200
+_history_lock = threading.Lock()
+
+
+def load_history():
+    try:
+        return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def add_history(text, app_name):
+    with _history_lock:
+        items = load_history()
+        items.insert(0, {"time": datetime.datetime.now().isoformat(timespec="seconds"), "text": text, "app": app_name})
+        HISTORY_FILE.write_text(json.dumps(items[:HISTORY_MAX], ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def clear_history():
+    with _history_lock:
+        HISTORY_FILE.write_text("[]", encoding="utf-8")
 VOCAB_FILE = OUT_DIR / "vocabulaire.txt"  # un mot / nom propre par ligne : aide Whisper à bien les écrire
 if not VOCAB_FILE.exists():
     VOCAB_FILE.write_text("", encoding="utf-8")
@@ -112,8 +165,8 @@ def vocab_prompt():
 def transcribe(audio: np.ndarray) -> dict:
     kwargs = dict(path_or_hf_repo=MODEL, condition_on_previous_text=False,
                   no_speech_threshold=0.6, compression_ratio_threshold=2.4)
-    if LANG:
-        kwargs["language"] = LANG
+    if SETTINGS["language"]:
+        kwargs["language"] = SETTINGS["language"]
     prompt = vocab_prompt()
     if prompt:
         kwargs["initial_prompt"] = prompt
@@ -141,6 +194,11 @@ _ax_enabled = set()
 def front_pid():
     app = NSWorkspace.sharedWorkspace().frontmostApplication()
     return app.processIdentifier() if app else None
+
+
+def front_app_name():
+    app = NSWorkspace.sharedWorkspace().frontmostApplication()
+    return str(app.localizedName()) if app else ""
 
 
 def enable_accessibility(pid):
@@ -242,10 +300,20 @@ def clipboard_count() -> int:
 
 
 def press_paste() -> None:
-    kb = keyboard.Controller()
-    with kb.pressed(keyboard.Key.cmd):
-        kb.press("v")
-        kb.release("v")
+    """Cmd+V envoyé directement au système (utilisable depuis n'importe quel thread)."""
+    for down in (True, False):
+        event = CGEventCreateKeyboardEvent(None, V_KEYCODE, down)
+        CGEventSetFlags(event, kCGEventFlagMaskCommand)
+        CGEventPost(kCGHIDEventTap, event)
+
+
+def permissions():
+    mic = AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio)  # 0 pas demandé, 3 accordé
+    return {"micro": {0: "inconnu", 3: "ok"}.get(mic, "refusé"),
+            "accessibility": "ok" if AXIsProcessTrusted() else "refusé"}
+
+
+PRIVACY_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_"
 
 
 def fmt(sec: float) -> str:
@@ -280,7 +348,8 @@ class LongRecording:
     """Sans limite de durée : WAV écrit en continu + transcription par blocs coupés sur les silences."""
 
     def __init__(self):
-        stamp = datetime.datetime.now().strftime("%Y-%m-%d_%Hh%M")
+        self.started = datetime.datetime.now()
+        stamp = self.started.strftime("%Y-%m-%d_%Hh%M")
         self.wav_path = OUT_DIR / f"{stamp}.wav"
         self.txt_path = OUT_DIR / f"{stamp}.txt"
         self.txt_path.write_text(
@@ -371,78 +440,242 @@ class LongRecording:
         return out
 
 
+# ----------------------------------------------------------------------------- réunions (pour la fenêtre)
+RECORDING_STEM = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}h\d{2}$")
+
+
+def list_recordings():
+    out = []
+    for txt in sorted(OUT_DIR.glob("*.txt"), reverse=True):
+        if not RECORDING_STEM.match(txt.stem):
+            continue
+        wav = txt.with_suffix(".wav")
+        speakers = txt.with_name(txt.stem + "_locuteurs.txt")
+        lines = [l for l in txt.read_text(encoding="utf-8").splitlines()[2:] if l.strip()]
+        out.append({
+            "stem": txt.stem,
+            "txt": str(txt),
+            "wav": str(wav) if wav.exists() else None,
+            "speakers": str(speakers) if speakers.exists() else None,
+            "duration": max(0, wav.stat().st_size - 44) / (2 * SR) if wav.exists() else None,
+            "lines": len(lines),
+            "preview": re.sub(r"^\[[\d:]+\]\s*", "", lines[0])[:160] if lines else "",
+        })
+    return out
+
+
+def inside_out_dir(path) -> Path:
+    p = Path(path).resolve()
+    if OUT_DIR.resolve() not in p.parents:
+        raise ValueError("Chemin hors du dossier des transcriptions")
+    return p
+
+
 # ----------------------------------------------------------------------------- application
+STATUS_TITLES = {"pret": "🎙", "ecoute": "🔴", "transcription": "⏳", "reunion": "🔴 réunion"}
+
+
 class App(rumps.App):
     def __init__(self):
         super().__init__("🎙", quit_button="Quitter")
-        self.paste_item = rumps.MenuItem("Coller dans le champ de texte actif", callback=self.toggle_paste)
-        self.paste_item.state = True
-        self.restore_item = rumps.MenuItem("Remettre le presse-papiers après collage", callback=self.toggle_paste)
-        self.restore_item.state = True
+        self.paste_item = rumps.MenuItem("Coller dans le champ de texte actif", callback=self.toggle_setting)
+        self.restore_item = rumps.MenuItem("Remettre le presse-papiers après collage", callback=self.toggle_setting)
         self.toggle_item = rumps.MenuItem("Démarrer l'enregistrement long", callback=self.toggle_long)
-        self.menu = [self.toggle_item, self.paste_item, self.restore_item, None,
-                     rumps.MenuItem("Modifier le vocabulaire…", callback=lambda _: subprocess.run(["open", str(VOCAB_FILE)])),
-                     rumps.MenuItem("Voir les mots appris…", callback=self.show_learned),
+        self.menu = [rumps.MenuItem("Ouvrir MacDictée…", callback=lambda _: self.window.show()), None,
+                     self.toggle_item, self.paste_item, self.restore_item, None,
                      rumps.MenuItem("Ouvrir le dossier des transcriptions", callback=lambda _: subprocess.run(["open", str(OUT_DIR)]))]
+        self.sync_menu()
+        self.window = Window(self.handle)
         self.dictation = Dictation()
         self.dictating = False
         self.paste_gen = 0
         self.long = None
-        self.listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
-        self.listener.start()
-        # préchauffe le modèle pour que la 1re dictée soit instantanée
-        threading.Thread(target=lambda: transcribe(np.zeros(SR, dtype="float32")), daemon=True).start()
+        self.status = "pret"
+        self.model_ready = False
+        self._monitors = []
+        rumps.events.before_start.register(self._on_start)
+        threading.Thread(target=self._warm_up, daemon=True).start()
 
-    def show_learned(self, _):
-        if not LEARN_FILE.exists():
-            LEARN_FILE.write_text(json.dumps(load_store(), ensure_ascii=False, indent=2), encoding="utf-8")
-        subprocess.run(["open", str(LEARN_FILE)])
+    def _on_start(self):
+        # écoute d'Option droite sur le thread principal (nécessite l'autorisation Accessibilité)
+        self._monitors = [
+            NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, self.on_flags),
+            NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskFlagsChanged, self._on_local_flags),
+        ]
+        perms = permissions()
+        if perms["accessibility"] != "ok":
+            AXIsProcessTrustedWithOptions({"AXTrustedCheckOptionPrompt": True})
+        if perms["micro"] == "inconnu":
+            AVCaptureDevice.requestAccessForMediaType_completionHandler_(AVMediaTypeAudio, lambda ok: self.push_state())
+        if set(perms.values()) != {"ok"}:
+            self.window.show()  # premier lancement ou autorisation manquante : on montre où ça coince
 
-    def toggle_paste(self, sender):
-        sender.state = not sender.state
+    def _warm_up(self):
+        transcribe(np.zeros(SR, dtype="float32"))  # la 1re dictée est ensuite instantanée
+        self.model_ready = True
+        self.push_state()
 
-    def set_title(self, title):
-        callAfter(setattr, self, "title", title)  # appelé depuis des threads : on passe par le thread principal
+    # --- état partagé avec la fenêtre
+    def set_status(self, status):
+        self.status = status
+        callAfter(setattr, self, "title", STATUS_TITLES[status])  # appelé depuis des threads
+        self.push_state()
+
+    def snapshot(self):
+        bundle = str(NSBundle.mainBundle().bundlePath())
+        return {
+            "status": self.status,
+            "model_ready": self.model_ready,
+            "model": MODEL,
+            "permissions": permissions(),
+            "settings": SETTINGS,
+            "long": {"since": self.long.started.isoformat(timespec="seconds"), "txt": str(self.long.txt_path)}
+                    if self.long else None,
+            "out_dir": str(OUT_DIR),
+            "can_restart": bundle.endswith(".app"),
+        }
+
+    def push_state(self):
+        self.window.emit("state", self.snapshot())
+
+    def sync_menu(self):
+        self.paste_item.state = SETTINGS["paste"]
+        self.restore_item.state = SETTINGS["restore_clipboard"]
+
+    def toggle_setting(self, sender):
+        key = "paste" if sender is self.paste_item else "restore_clipboard"
+        SETTINGS[key] = not SETTINGS[key]
+        save_settings()
+        self.sync_menu()
+        self.push_state()
+
+    # --- actions demandées par la fenêtre (thread principal)
+    def handle(self, action, args):
+        if action == "state":
+            return self.snapshot()
+        if action == "history":
+            return load_history()
+        if action == "history_clear":
+            clear_history()
+            return []
+        if action == "copy":
+            set_clipboard(args["text"])
+            return True
+        if action == "recordings":
+            return list_recordings()
+        if action == "recording_text":
+            if not RECORDING_STEM.match(args["stem"]):
+                raise ValueError("Nom de fichier invalide")
+            txt = OUT_DIR / f"{args['stem']}.txt"
+            speakers = OUT_DIR / f"{args['stem']}_locuteurs.txt"
+            return (speakers if speakers.exists() else txt).read_text(encoding="utf-8")
+        if action == "open":
+            subprocess.run(["open", str(inside_out_dir(args["path"]))])
+            return True
+        if action == "reveal":
+            subprocess.run(["open", "-R", str(inside_out_dir(args["path"]))])
+            return True
+        if action == "open_folder":
+            subprocess.run(["open", str(OUT_DIR)])
+            return True
+        if action == "toggle_long":
+            self.toggle_long(None)
+            return self.snapshot()
+        if action == "vocab":
+            return [w.strip() for w in VOCAB_FILE.read_text(encoding="utf-8").splitlines() if w.strip()]
+        if action == "vocab_set":
+            words = list(dict.fromkeys(w.strip() for w in args["words"] if w.strip()))
+            VOCAB_FILE.write_text("".join(w + "\n" for w in words), encoding="utf-8")
+            return words
+        if action == "rules":
+            return load_store()["rules"]
+        if action == "rule_delete":
+            with _learn_lock:
+                store = load_store()
+                store["rules"].pop(args["wrong"], None)
+                store["counts"] = {k: v for k, v in store["counts"].items() if not k.startswith(args["wrong"] + "\t")}
+                LEARN_FILE.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+            return store["rules"]
+        if action == "setting":
+            if args["key"] not in DEFAULT_SETTINGS:
+                raise ValueError("Réglage inconnu")
+            SETTINGS[args["key"]] = args["value"]
+            save_settings()
+            self.sync_menu()
+            return self.snapshot()
+        if action == "privacy":
+            if args["what"] == "Microphone" and permissions()["micro"] == "inconnu":
+                AVCaptureDevice.requestAccessForMediaType_completionHandler_(AVMediaTypeAudio, lambda ok: self.push_state())
+            elif args["what"] == "Accessibility":
+                AXIsProcessTrustedWithOptions({"AXTrustedCheckOptionPrompt": True})
+            subprocess.run(["open", PRIVACY_URL + args["what"]])
+            return True
+        if action == "restart":
+            bundle = str(NSBundle.mainBundle().bundlePath())
+            subprocess.Popen(["/bin/sh", "-c", 'sleep 1; open "$0"', bundle])
+            rumps.quit_application()
+            return True
+        raise ValueError(f"Action inconnue : {action}")
 
     # --- dictée
-    def on_press(self, key):
-        if key == HOTKEY and not self.dictating and self.long is None:
+    def on_flags(self, event):
+        if event.keyCode() != HOTKEY_KEYCODE:
+            return
+        if event.modifierFlags() & HOTKEY_FLAG:
+            self.on_press()
+        else:
+            self.on_release()
+
+    def _on_local_flags(self, event):
+        self.on_flags(event)  # quand la fenêtre MacDictée a le focus, le moniteur global ne voit rien
+        return event
+
+    def on_press(self):
+        if not self.dictating and self.long is None:
             self.dictating = True
             self.paste_gen += 1  # clôt la surveillance de la dictée précédente (analyse la correction)
-            self.set_title("🔴")
+            self.set_status("ecoute")
             play("Tink")
-            self.dictation.start()
+            try:
+                self.dictation.start()
+            except Exception as e:
+                self.dictating = False
+                self.set_status("pret")
+                notify("MacDictée", "Micro indisponible", str(e)[:200])
+                return
             threading.Thread(target=lambda: enable_accessibility(front_pid()), daemon=True).start()
 
-    def on_release(self, key):
-        if key == HOTKEY and self.dictating:
+    def on_release(self):
+        if self.dictating:
             self.dictating = False
             audio = self.dictation.stop()
             play("Pop")
-            self.set_title("⏳")
-            threading.Thread(target=self._finish_dictation, args=(audio,), daemon=True).start()
+            self.set_status("transcription")
+            threading.Thread(target=self._finish_dictation, args=(audio, front_app_name()), daemon=True).start()
 
-    def _finish_dictation(self, audio):
+    def _finish_dictation(self, audio, app_name):
         try:
             if len(audio) < SR // 4 or float(np.abs(audio).max()) < 0.01:
                 return  # trop court ou silence
             text = transcribe(audio)["text"]
             if not text:
                 return
+            add_history(text, app_name)
+            self.window.emit("history", load_history())
             saved = save_clipboard()
             set_clipboard(text)  # sans collage, le texte reste dans le presse-papiers
-            if not self.paste_item.state:
+            if not SETTINGS["paste"]:
                 return
             focused = text_field_focused()
             if focused is False:
                 notify("MacDictée", "Copié dans le presse-papiers",
-                                   "Aucun champ de texte actif : faites Cmd+V où vous voulez.")
+                       "Aucun champ de texte actif : faites Cmd+V où vous voulez.")
             else:  # True, ou indéterminé : on tente de coller
                 el = get_focused_element()
                 before = get_value(el) if el is not None else None
                 count = clipboard_count()
                 press_paste()
-                if self.restore_item.state:
+                if SETTINGS["restore_clipboard"]:
                     time.sleep(0.5)  # laisse l'app cible lire le presse-papiers avant de le remettre
                     if clipboard_count() == count:  # sauf si vous avez copié autre chose entre-temps
                         restore_clipboard(saved)
@@ -452,7 +685,7 @@ class App(rumps.App):
         except Exception as e:
             notify("MacDictée", "Erreur de dictée", str(e)[:200])
         finally:
-            self.set_title("🎙")
+            self.set_status("pret")
 
     def _watch_edits(self, text, el, before, gen):
         """Surveille le champ après le collage : si vous corrigez un mot, on l'apprend."""
@@ -487,14 +720,16 @@ class App(rumps.App):
     # --- enregistrement long
     def toggle_long(self, _):
         if self.long is None:
+            if self.dictating:
+                return
             self.long = LongRecording()
             self.long.start()
-            self.title = "🔴 réunion"
             self.toggle_item.title = "Arrêter l'enregistrement long"
+            self.set_status("reunion")
         else:
             rec, self.long = self.long, None
-            self.title = "⏳"
             self.toggle_item.title = "Démarrer l'enregistrement long"
+            self.set_status("transcription")
             threading.Thread(target=self._finish_long, args=(rec,), daemon=True).start()
 
     def _finish_long(self, rec):
@@ -507,7 +742,8 @@ class App(rumps.App):
                 notify("MacDictée", "Locuteurs non identifiés", str(e)[:200])
             notify("MacDictée", "Transcription terminée", str(out or rec.txt_path))
         finally:
-            self.set_title("🎙")
+            self.set_status("pret")
+            self.window.emit("recordings", list_recordings())
 
 
 if __name__ == "__main__":

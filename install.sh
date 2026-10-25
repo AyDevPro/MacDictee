@@ -29,5 +29,5 @@ cp -R dist/MacDictée.app "$HOME/Applications/"
 
 echo ""
 echo "✅ Installé dans ~/Applications/MacDictée.app"
-echo "Au premier lancement, autorisez : Microphone, Accessibilité et Surveillance de l'entrée"
+echo "Au premier lancement, autorisez : Microphone et Accessibilité (la fenêtre MacDictée vous guide)"
 echo "(Réglages Système > Confidentialité et sécurité)."

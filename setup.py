@@ -10,7 +10,7 @@ OPTIONS = {
         "LSUIElement": True,  # pas d'icône dans le Dock, seulement la barre de menus
         "NSMicrophoneUsageDescription": "MacDictée a besoin du micro pour transcrire votre voix.",
     },
-    "packages": ["mlx", "mlx_whisper", "rumps", "sounddevice", "numpy", "pynput",
+    "packages": ["mlx", "mlx_whisper", "rumps", "sounddevice", "numpy", "Quartz", "WebKit", "AVFoundation",
                  "AppKit", "ApplicationServices"],
 }
 

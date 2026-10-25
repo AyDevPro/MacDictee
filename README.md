@@ -16,7 +16,9 @@ Le premier lancement télécharge le modèle Whisper (~1,5 Go).
 ## Autorisations (Réglages Système > Confidentialité et sécurité)
 
 - **Microphone** : pour enregistrer
-- **Accessibilité** et **Surveillance de l'entrée** : pour détecter la touche, repérer le champ de texte actif et coller
+- **Accessibilité** : pour détecter la touche, repérer le champ de texte actif et coller
+
+La fenêtre *Ouvrir MacDictée…* (menu 🎙) montre l'état des autorisations, avec un bouton pour chacune et un bouton *Relancer*. Elle regroupe aussi l'historique des dictées, les réunions, le vocabulaire, les mots appris et les réglages.
 
 ## Utilisation
 

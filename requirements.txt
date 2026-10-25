@@ -2,7 +2,9 @@ mlx-whisper
 rumps
 sounddevice
 numpy
-pynput
+pyobjc-framework-Quartz
+pyobjc-framework-WebKit
+pyobjc-framework-AVFoundation
 pyobjc-framework-Cocoa
 pyobjc-framework-ApplicationServices
 py2app
