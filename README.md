@@ -56,6 +56,8 @@ La fenêtre *Ouvrir MacDictée…* (menu 🎙) montre l'état des autorisations,
 - Après un collage, votre presse-papiers précédent est remis en place (comme Wispr Flow). Option désactivable dans le menu 🎙 (*Remettre le presse-papiers après collage*) pour garder le texte dicté.
 - Le menu 🎙 permet de désactiver le collage automatique (presse-papiers seul).
 
+**Listes et retours à la ligne** : dites « point numéro 1 … point numéro 2 … » (ou « premièrement … deuxièmement … », « étape 1 … ») pour une liste numérotée, « tiret … tiret … » pour une liste à puces, « à la ligne » ou « nouveau paragraphe » pour aller à la ligne. Par règles, instantané et local (pas d'IA) ; une liste n'est créée qu'à partir de deux éléments qui se suivent. Désactivable dans Réglages.
+
 **Vocabulaire personnalisé** : menu 🎙 > *Modifier le vocabulaire…*, un mot ou nom propre par ligne (prénoms, marques, jargon). Whisper les écrira correctement.
 
 **Apprentissage automatique** : après un collage, MacDictée surveille le champ pendant 45 secondes (ou jusqu'à votre prochaine dictée). Si vous corrigez un mot, il le note. Dès que vous faites **la même correction 2 fois**, il l'apprend : le mot est ajouté au vocabulaire et remplacé automatiquement dans toutes les futures transcriptions (dictée et réunions), avec une notification « Nouveau mot appris ». Menu 🎙 > *Voir les mots appris…* pour consulter ou supprimer une règle (fichier `~/Transcriptions/mots_appris.json`).

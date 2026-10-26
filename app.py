@@ -42,6 +42,7 @@ from ServiceManagement import SMAppService
 from Quartz import CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags, kCGEventFlagMaskCommand, kCGHIDEventTap
 
 import speakers
+from formatting import format_dictation
 import updates
 from overlay import Overlay
 from ui import Window, install_edit_menu
@@ -95,6 +96,7 @@ DEFAULT_SETTINGS = {
     "handsfree": True,  # double appui = dictée continue jusqu'au prochain appui
     "system_audio": True,  # réunions : enregistrer aussi le son du Mac (visios), sur une piste à part
     "free_memory": True,  # décharger le modèle après IDLE_UNLOAD sans utilisation (rechargé en ~1 s)
+    "format": True,  # listes dictées (« point numéro 1… ») et « à la ligne » mis en forme (formatting.py)
 }
 
 
@@ -1088,6 +1090,8 @@ class App(rumps.App):
             text = transcribe(audio)["text"]
             if not text:
                 return
+            if SETTINGS["format"]:
+                text = format_dictation(text)
             add_history(text, app_name)
             self.window.emit("history", load_history())
             saved = save_clipboard()
