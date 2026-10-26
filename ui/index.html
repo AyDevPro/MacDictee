@@ -352,11 +352,12 @@ function renderState(s) {
   $("#perms").innerHTML =
     perm("micro", "Microphone", "Microphone", "Pour enregistrer votre voix.") +
     perm("accessibility", "Accessibility", "Accessibilité", "Pour détecter la touche de dictée et coller le texte.") +
-    (!s.settings.system_audio ? "" : P.screen === "tap"
+    (!s.settings.system_audio ? "" : P.screen === "tap"  // statut illisible (TCC indisponible) : simple lien
       ? `<div class="row"><div class="grow"><b>Son du Mac (visios)</b><div class="muted small">Facultatif : « Enregistrement des sons du système uniquement », pour capter les gens d'une visio (Meet, WhatsApp, Zoom…). macOS la demande au premier enregistrement ; vérifiable dans les réglages.</div></div>
           <button class="btn" onclick="md.call('privacy',{what:'AudioCapture'})">Ouvrir les réglages…</button></div>`
-      : perm("screen", "ScreenCapture", "Son du Mac (visios)",
-      "Facultatif : « Enregistrement de l'écran et audio système », pour capter les gens d'une visio (Meet, WhatsApp, Zoom…). Seul le son est enregistré.")) +
+      : perm("screen", s.audio_tap ? "AudioCapture" : "ScreenCapture", "Son du Mac (visios)",
+      s.audio_tap ? "Facultatif : « Enregistrement des sons du système uniquement », pour capter les gens d'une visio (Meet, WhatsApp, Zoom…)."
+                  : "Facultatif : « Enregistrement de l'écran et audio système », pour capter les gens d'une visio (Meet, WhatsApp, Zoom…). Seul le son est enregistré.")) +
     (s.can_restart ? `<div class="row"><div class="grow muted small">Vous venez d'accorder une autorisation ? Relancez l'app pour qu'elle soit prise en compte.</div>
       <button class="btn" onclick="md.call('restart')">Relancer MacDictée</button></div>` : "");
   $("#perm-alert").innerHTML = P.accessibility === "ok" && P.micro === "ok" ? "" :

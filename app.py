@@ -438,12 +438,38 @@ def fn_key_conflict() -> bool:
     return int(prefs.integerForKey_("AppleFnUsageType")) != 0  # 0 = « Ne rien faire »
 
 
+def _tcc_preflight(service: str):
+    """Statut d'une autorisation (0 accordée, 1 refusée, 2 jamais demandée) via TCC, framework privé d'Apple :
+    il n'existe pas d'API publique pour « Enregistrement des sons du système uniquement ». None si indisponible."""
+    import ctypes
+    try:
+        cf = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+        tcc = ctypes.cdll.LoadLibrary("/System/Library/PrivateFrameworks/TCC.framework/TCC")
+        tcc.TCCAccessPreflight.restype = ctypes.c_int
+        tcc.TCCAccessPreflight.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        name = cf.CFStringCreateWithCString(None, service.encode(), 0x08000100)  # kCFStringEncodingUTF8
+        try:
+            return tcc.TCCAccessPreflight(name, None)
+        finally:
+            cf.CFRelease(name)
+    except Exception:
+        return None
+
+
+def system_audio_permission() -> str:
+    if not SYSTEM_AUDIO_TAP:
+        return "ok" if CGPreflightScreenCaptureAccess() else "refusé"
+    return {0: "ok", 1: "refusé", 2: "inconnu"}.get(_tcc_preflight("kTCCServiceAudioCapture"), "tap")
+
+
 def permissions():
     mic = AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio)  # 0 pas demandé, 3 accordé
     return {"micro": {0: "inconnu", 3: "ok"}.get(mic, "refusé"),
             "accessibility": "ok" if AXIsProcessTrusted() else "refusé",
-            # son du Mac (visios) : l'autorisation « sons du système uniquement » n'a pas d'API de vérification
-            "screen": "tap" if SYSTEM_AUDIO_TAP else ("ok" if CGPreflightScreenCaptureAccess() else "refusé")}
+            "screen": system_audio_permission()}  # son du Mac (visios)
 
 
 def login_item_enabled() -> bool:
@@ -796,6 +822,7 @@ class App(rumps.App):
             "version": APP_VERSION,
             "hotkeys": {k: v[2] for k, v in HOTKEYS.items()},
             "fn_conflict": fn_key_conflict(),
+            "audio_tap": SYSTEM_AUDIO_TAP,
             "update": self.update,
         }
 
@@ -986,6 +1013,17 @@ class App(rumps.App):
         if action == "privacy":
             if args["what"] == "ScreenCapture" and SYSTEM_AUDIO_TAP:
                 args = {"what": "AudioCapture"}
+            if args["what"] == "AudioCapture" and system_audio_permission() == "inconnu":
+                # jamais demandée : un court essai de capture fait apparaître la demande de macOS
+                def ask():
+                    try:
+                        SystemAudio().stop()
+                    except Exception:
+                        pass
+                    time.sleep(1)
+                    self.push_state()
+                threading.Thread(target=ask, daemon=True).start()
+                return True
             elif args["what"] == "ScreenCapture" and not CGPreflightScreenCaptureAccess():
                 CGRequestScreenCaptureAccess()
             if args["what"] == "Microphone" and permissions()["micro"] == "inconnu":
