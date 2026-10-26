@@ -58,6 +58,8 @@ La fenêtre *Ouvrir MacDictée…* (menu 🎙) montre l'état des autorisations,
 
 **Listes et retours à la ligne** : dites « point numéro 1 … point numéro 2 … » (ou « premièrement … deuxièmement … », « étape 1 … ») pour une liste numérotée, « tiret … tiret … » pour une liste à puces, « à la ligne » ou « nouveau paragraphe » pour aller à la ligne. Par règles, instantané et local (pas d'IA) ; une liste n'est créée qu'à partir de deux éléments qui se suivent. Désactivable dans Réglages.
 
+**Réécriture IA locale (option)** : Réglages > *Réécriture IA locale*. Un petit modèle d'IA (Qwen3 4B, 2,3 Go téléchargés une fois) tourne **sur votre Mac** : il enlève les « euh », applique vos corrections (« à 14 h, non pardon 15 h » → « à 15 h »), fait une liste quand vous énumérez (« d'abord… ensuite… enfin… »). Il n'est appelé que si la dictée en a besoin (les phrases déjà propres restent instantanées, sinon ~2 s de plus), et un garde-fou garde votre texte tel quel si l'IA retire ou ajoute du contenu. La même IA rédige les **comptes rendus de réunion** (onglet Réunions > *Rédiger le compte rendu* : résumé, décisions, actions, points en suspens), fichier `..._compte-rendu.md`. Aucun mot ne quitte le Mac.
+
 **Vocabulaire personnalisé** : menu 🎙 > *Modifier le vocabulaire…*, un mot ou nom propre par ligne (prénoms, marques, jargon). Whisper les écrira correctement.
 
 **Apprentissage automatique** : après un collage, MacDictée surveille le champ pendant 45 secondes (ou jusqu'à votre prochaine dictée). Si vous corrigez un mot, il le note. Dès que vous faites **la même correction 2 fois**, il l'apprend : le mot est ajouté au vocabulaire et remplacé automatiquement dans toutes les futures transcriptions (dictée et réunions), avec une notification « Nouveau mot appris ». Menu 🎙 > *Voir les mots appris…* pour consulter ou supprimer une règle (fichier `~/Transcriptions/mots_appris.json`).
@@ -75,6 +77,10 @@ La fenêtre *Ouvrir MacDictée…* (menu 🎙) montre l'état des autorisations,
 **Visios (Meet, WhatsApp, Zoom…)** : avec le réglage *Capter le son du Mac pendant les réunions* (activé par défaut) et l'autorisation « Enregistrement de l'écran et audio système », MacDictée enregistre votre micro **et** le son du Mac. Dans la transcription, vous apparaissez comme « Moi » et les gens de la visio sont séparés entre eux (Visio 1, 2…). **Réunion hybride** (plusieurs personnes autour du Mac + d'autres en visio) : « Sur place 1, 2… » et « Visio 1, 2… ». Sans l'autorisation, seul le micro est enregistré ; son état s'affiche sur l'Accueil.
 
 **Mains libres** : appuyez deux fois rapidement sur la touche de dictée, parlez aussi longtemps que vous voulez, puis appuyez une fois pour terminer (Échap pour annuler). Une pastille en bas de l'écran indique que MacDictée écoute.
+
+## Confidentialité
+
+Tout le traitement (transcription, séparation des intervenants, réécriture, comptes rendus) se fait sur le Mac ; l'app a été testée internet coupé. Internet ne sert qu'à télécharger les modèles (une fois), et à vérifier les mises à jour sur GitHub (aucune donnée envoyée). Vos fichiers sont dans `~/Transcriptions`.
 
 ## Réglages
 

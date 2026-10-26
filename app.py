@@ -42,6 +42,7 @@ from ServiceManagement import SMAppService
 from Quartz import CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags, kCGEventFlagMaskCommand, kCGHIDEventTap
 
 import speakers
+from rewrite import MODEL_SIZE as AI_MODEL_SIZE, Rewriter, needs_rewrite as needs_ai
 from formatting import format_dictation
 import updates
 from overlay import Overlay
@@ -97,6 +98,7 @@ DEFAULT_SETTINGS = {
     "system_audio": True,  # réunions : enregistrer aussi le son du Mac (visios), sur une piste à part
     "free_memory": True,  # décharger le modèle après IDLE_UNLOAD sans utilisation (rechargé en ~1 s)
     "format": True,  # listes dictées (« point numéro 1… ») et « à la ligne » mis en forme (formatting.py)
+    "ai_rewrite": False,  # réécriture IA locale des dictées (rewrite.py, ~2,3 Go téléchargés une fois)
 }
 
 
@@ -259,16 +261,31 @@ _last_use = time.monotonic()
 _cache_checked = False
 
 
+REWRITER = Rewriter()  # IA locale : réécriture des dictées et comptes rendus (utilise aussi _model_lock)
+
+
 def unload_model():
-    """Libère la mémoire du modèle (rechargé automatiquement à la prochaine transcription)."""
+    """Libère la mémoire des modèles (rechargés automatiquement à la prochaine utilisation)."""
     with _model_lock:
         holder = mlx_whisper.transcribe.__globals__["ModelHolder"]
-        if holder.model is None:
+        if holder.model is None and REWRITER.model is None:
             return False
         holder.model = holder.model_path = None
+        REWRITER.unload()
         gc.collect()
         mx.clear_cache()
         return True
+
+
+def ai_call(fn, *args):
+    """Appel du modèle d'IA locale sous le verrou MLX (un seul calcul à la fois sur le GPU)."""
+    global _last_use
+    with _model_lock:
+        try:
+            return fn(*args)
+        finally:
+            mx.clear_cache()
+            _last_use = time.monotonic()
 
 
 def transcribe(audio: np.ndarray, words: bool = False) -> dict:
@@ -685,6 +702,13 @@ class LongRecording:
 RECORDING_STEM = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}h\d{2}$")
 
 
+SUMMARIZING = set()  # réunions dont le compte rendu est en cours de rédaction
+
+
+def summary_path(txt: Path) -> Path:
+    return Path(f"{txt.with_suffix('')}_compte-rendu.md")
+
+
 def recording_txt(stem) -> Path:
     if not RECORDING_STEM.match(stem):
         raise ValueError("Nom de fichier invalide")
@@ -714,6 +738,8 @@ def list_recordings(diarizing=None):
             "txt": str(txt),
             "wav": str(wav) if wav.exists() else None,
             "speakers_txt": str(speakers_txt) if speakers_json.exists() else None,
+            "summary": str(summary_path(txt)) if summary_path(txt).exists() else None,
+            "summarizing": txt.stem in SUMMARIZING,
             "system": speakers.system_path(txt).exists(),
             "diarizing": diarizing.get(txt.stem),
             "duration": max(0, wav.stat().st_size - 44) / (2 * SR) if wav.exists() else None,
@@ -731,7 +757,8 @@ def inside_out_dir(path) -> Path:
 
 
 # ----------------------------------------------------------------------------- application
-STATUS_TITLES = {"pret": "🎙", "ecoute": "🔴", "mainslibres": "🔴", "transcription": "⏳", "reunion": "🔴 réunion"}
+STATUS_TITLES = {"pret": "🎙", "ecoute": "🔴", "mainslibres": "🔴", "transcription": "⏳", "reecriture": "✨",
+                 "reunion": "🔴 réunion"}
 
 
 class App(rumps.App):
@@ -759,6 +786,8 @@ class App(rumps.App):
         self.model_ready = False
         self._monitors = []
         self.diarizing = {}  # réunion -> avancement (0..1) de la séparation des intervenants
+        self.ai_state = "pret" if REWRITER.downloaded() else "absent"  # absent / telechargement / pret / erreur
+        self.ai_error = ""
         self.update = None  # dernière version disponible (dict de updates.latest_release) si plus récente
         self.update_item = None
         rumps.events.before_start.register(self._on_start)
@@ -823,6 +852,7 @@ class App(rumps.App):
             "hotkeys": {k: v[2] for k, v in HOTKEYS.items()},
             "fn_conflict": fn_key_conflict(),
             "audio_tap": SYSTEM_AUDIO_TAP,
+            "ai": {"state": self.ai_state, "error": self.ai_error, "size": AI_MODEL_SIZE},
             "update": self.update,
         }
 
@@ -934,7 +964,8 @@ class App(rumps.App):
                 raise ValueError("Cette réunion est en cours de traitement")
             files = [txt.with_suffix(".wav"), speakers.system_path(txt)]
             if args["what"] == "all":
-                files += [txt, *speakers.paths(txt), speakers.words_path(txt), txt.with_name(txt.stem + "_locuteurs.txt")]
+                files += [txt, *speakers.paths(txt), speakers.words_path(txt), summary_path(txt),
+                          txt.with_name(txt.stem + "_locuteurs.txt")]
             for f in files:
                 trash(f)
             return list_recordings(self.diarizing)
@@ -943,6 +974,15 @@ class App(rumps.App):
         if action == "speakers_run":
             self.run_speakers(recording_txt(args["stem"]), args.get("count") or None)
             return list_recordings(self.diarizing)
+        if action == "summary_get":
+            path = summary_path(recording_txt(args["stem"]))
+            return path.read_text(encoding="utf-8") if path.exists() else None
+        if action == "summary_run":
+            self.run_summary(recording_txt(args["stem"]))
+            return list_recordings(self.diarizing)
+        if action == "ai_download":
+            self.download_ai()
+            return self.snapshot()
         if action == "speakers_rename":
             txt = recording_txt(args["stem"])
             data = speakers.read(txt)
@@ -987,6 +1027,8 @@ class App(rumps.App):
             if args["key"] == "dock":
                 self.apply_dock()
                 self.window.show()  # repasser en mode Dock fait perdre le premier plan à la fenêtre
+            if args["key"] == "ai_rewrite" and args["value"] and self.ai_state in ("absent", "erreur"):
+                self.download_ai()  # seule connexion de cette option : le modèle, une fois
             return self.snapshot()
         if action == "update_check":  # réseau : en arrière-plan, la réponse arrive par l'événement "update_checked"
             def run():
@@ -1128,6 +1170,12 @@ class App(rumps.App):
             text = transcribe(audio)["text"]
             if not text:
                 return
+            if SETTINGS["ai_rewrite"] and self.ai_state == "pret" and needs_ai(text):
+                self.set_status("reecriture")
+                try:
+                    text, _ = ai_call(REWRITER.clean, text)  # repli sur la transcription si le garde-fou refuse
+                except Exception as e:
+                    notify("MacDictée", "Réécriture IA impossible", f"Texte collé tel quel : {e}"[:200])
             if SETTINGS["format"]:
                 text = format_dictation(text)
             add_history(text, app_name)
@@ -1245,6 +1293,46 @@ class App(rumps.App):
         self.diarizing[stem] = 0.0
         threading.Thread(target=self._speakers_worker, args=(txt, count), daemon=True).start()
 
+    # --- IA locale : téléchargement (une fois) et comptes rendus
+    def download_ai(self):
+        if self.ai_state == "telechargement":
+            return
+        self.ai_state, self.ai_error = "telechargement", ""
+        self.push_state()
+
+        def run():
+            try:
+                REWRITER.download()
+                self.ai_state = "pret"
+                notify("MacDictée", "IA locale prête", "Réécriture des dictées et comptes rendus disponibles.")
+            except Exception as e:
+                self.ai_state, self.ai_error = "erreur", str(e)[:200]
+            self.push_state()
+        threading.Thread(target=run, daemon=True).start()
+
+    def run_summary(self, txt):
+        if self.ai_state != "pret":
+            raise ValueError("Activez d'abord l'IA locale dans Réglages")
+        if txt.stem in SUMMARIZING:
+            return
+        SUMMARIZING.add(txt.stem)
+
+        def run():
+            named = speakers.paths(txt)[1]
+            transcript = (named if named.exists() else txt).read_text(encoding="utf-8")
+            try:
+                summary = ai_call(REWRITER.summarize, transcript)
+                summary_path(txt).write_text(
+                    f"# Compte rendu : {txt.stem}\n\n{summary}\n\n_Généré sur ce Mac par l'IA locale de MacDictée, "
+                    f"à relire._\n", encoding="utf-8")
+                notify("MacDictée", "Compte rendu prêt", txt.stem)
+            except Exception as e:
+                notify("MacDictée", "Compte rendu impossible", str(e)[:200])
+            finally:
+                SUMMARIZING.discard(txt.stem)
+                self.window.emit("recordings", list_recordings(self.diarizing))
+        threading.Thread(target=run, daemon=True).start()
+
     def _speakers_worker(self, txt, count):
         stem, last = txt.stem, [0.0]
 
@@ -1287,6 +1375,10 @@ def self_test(wav_path):
     print("SELFTEST mots horodatés :", len(words), "| premier :", words[0]["word"].strip(), round(float(words[0]["start"]), 2), flush=True)
     speakers.ensure_models()
     print("SELFTEST intervenants :", len({s for _, _, s in speakers.diarize(audio)}), flush=True)
+    if REWRITER.downloaded():
+        text, used = REWRITER.clean("euh on se retrouve à 14h, non pardon à 15h devant la gare")
+        print("SELFTEST IA locale :", used, "->", text, "| transformers embarqué :",
+              hasattr(sys.modules.get("transformers"), "__file__"), flush=True)
     try:
         SystemAudio().stop()
         print("SELFTEST son du Mac : ok", flush=True)

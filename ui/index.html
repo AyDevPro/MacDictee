@@ -213,6 +213,12 @@ tr:last-child td { border-bottom: 0; }
         <label class="switch"><input type="checkbox" data-setting="format"><span></span></label>
       </div>
       <div class="row">
+        <div class="grow"><b>Réécriture IA locale</b> <span class="pill" id="ai-pill"></span>
+          <div class="muted small">Enlève les « euh », applique vos corrections (« 14 h, non pardon 15 h »), fait une liste quand vous énumérez, et rédige les comptes rendus de réunion. Tout se passe sur ce Mac : aucun mot n'est envoyé. Ajoute ~2 s aux dictées qui en ont besoin ; les phrases déjà propres restent instantanées.</div>
+          <div class="muted small" id="ai-detail"></div></div>
+        <label class="switch"><input type="checkbox" data-setting="ai_rewrite"><span></span></label>
+      </div>
+      <div class="row">
         <div class="grow"><b>Coller automatiquement</b><div class="muted small">Sinon le texte est seulement copié dans le presse-papiers.</div></div>
         <label class="switch"><input type="checkbox" data-setting="paste"><span></span></label>
       </div>
@@ -309,11 +315,12 @@ document.addEventListener("click", (e) => {
 });
 
 // ---- état
-let state = null, timer = null;
+let state = null, timer = null, aiReady = false;
 const STATES = {
   pret: ["🎙", "Prêt", "Maintenez la touche de dictée pour parler."],
   ecoute: ["🔴", "Je vous écoute…", "Relâchez la touche pour transcrire."],
   mainslibres: ["🔴", "Mains libres", "Appuyez une fois sur la touche pour terminer, Échap pour annuler."],
+  reecriture: ["✨", "Mise en forme…", "L'IA locale nettoie votre dictée, sur ce Mac."],
   transcription: ["⏳", "Transcription…", "Quelques instants."],
   reunion: ["🔴", "Réunion en cours", ""],
 };
@@ -376,6 +383,14 @@ function renderState(s) {
     el.type === "checkbox" ? (el.checked = !!v) : (el.value = v);
   });
   renderUpdate(s.update);
+  const ai = s.ai, pill = $("#ai-pill");
+  const AI = { absent: ["", ""], telechargement: ["wait", "Téléchargement…"], pret: ["ok", "Prête"], erreur: ["ko", "Erreur"] };
+  pill.className = "pill " + AI[ai.state][0]; pill.textContent = AI[ai.state][1];
+  pill.style.display = AI[ai.state][1] ? "" : "none";
+  $("#ai-detail").innerHTML = ai.state === "absent" ? `Le modèle (${esc(ai.size)}) sera téléchargé une seule fois à l'activation.`
+    : ai.state === "telechargement" ? `Téléchargement du modèle (${esc(ai.size)}), une seule fois… vous pouvez continuer à dicter.`
+    : ai.state === "erreur" ? `${esc(ai.error)} <a href="#" onclick="md.call('ai_download');return false">Réessayer</a>` : "";
+  aiReady = ai.state === "pret";
   $("#login-toggle").checked = !!s.login;
   $("#rec-hint").innerHTML = !s.settings.system_audio
     ? "Seul le micro est enregistré : en visio, la voix des autres n'est captée que si elle sort de vos haut-parleurs. Activez « Capter le son du Mac » dans Réglages."
@@ -486,7 +501,8 @@ function renderRecordings(items) {
   $("#rec-list").innerHTML = items.length ? items.map((r) => `
     <div class="item rec-item" data-rec="${esc(r.stem)}"><div class="grow">
       <div class="meta">${esc(recDate(r.stem))}${r.duration != null ? " · " + fmtDur(r.duration) : " · audio supprimé"}${
-        r.system ? " · micro + son du Mac" : ""}${r.speakers_txt ? " · intervenants identifiés" : ""}${r.diarizing != null ? " · identification des intervenants…" : ""}</div>
+        r.system ? " · micro + son du Mac" : ""}${r.speakers_txt ? " · intervenants identifiés" : ""}${r.diarizing != null ? " · identification des intervenants…" : ""}${
+        r.summary ? " · compte rendu" : ""}${r.summarizing ? " · compte rendu en cours…" : ""}</div>
       <div class="text">${r.preview ? esc(r.preview) + (r.lines > 1 ? "…" : "") : '<span class="muted">(pas de texte transcrit)</span>'}</div></div>
       <button class="btn">Lire</button></div>`).join("")
     : `<div class="empty">Aucune réunion enregistrée.</div>`;
@@ -543,7 +559,20 @@ async function openRecording(stem) {
       }, []).map((b) => `<div class="turn"><div class="who spk" style="color:${color(b.speaker)}">${esc(data.names[b.speaker] || "Intervenant " + (b.speaker + 1))}
           <span class="muted">${fmtClock(b.start)}</span></div><div>${esc(b.texts.join(" "))}</div></div>`).join("")
     : esc(text);
-  const scroll = sameRecording ? $("#rec-viewer .viewer")?.scrollTop : 0;
+  const summary = r.summary ? await md.call("summary_get", { stem }) : null;
+  const summaryBlock = r.summarizing
+    ? `<div class="small muted">✨ Rédaction du compte rendu par l'IA locale, sur ce Mac… (environ une minute pour une heure de réunion)</div>`
+    : summary
+      ? `<div class="toolbar" style="margin-bottom:6px"><b class="grow">Compte rendu</b>
+           <button class="btn primary" id="sum-copy">Copier</button>
+           <button class="btn" data-action="open" data-path="${esc(r.summary)}">Ouvrir</button>
+           ${aiReady ? `<button class="btn" id="sum-run">Refaire</button>` : ""}</div>
+         <div class="viewer" style="font:inherit">${esc(summary.replace(/^# .*\n+/, ""))}</div>`
+      : aiReady
+        ? `<div class="toolbar"><div class="grow"><b>Compte rendu</b><div class="muted small">Résumé, décisions, actions : rédigé par l'IA locale, sans que rien ne quitte ce Mac.</div></div>
+             <button class="btn primary" id="sum-run">Rédiger le compte rendu</button></div>`
+        : `<div class="muted small">Compte rendu automatique : activez « Réécriture IA locale » dans Réglages.</div>`;
+  const scroll = sameRecording ? $("#rec-text")?.scrollTop : 0;
   $("#rec-viewer").innerHTML = `<div class="card" style="margin-bottom:14px">
     <div class="row" style="margin-bottom:12px;border:0;padding:0"><b class="grow">${esc(recDate(r.stem))}</b>
       <button class="btn" id="rec-close">✕</button></div>
@@ -556,9 +585,11 @@ async function openRecording(stem) {
       ${r.wav ? `<button class="btn danger" id="rec-del-audio">Supprimer l'audio</button>` : ""}
       <button class="btn danger" id="rec-del-all">Supprimer la réunion</button>
     </div>
-    <div class="sep"></div>${speakersBlock}<div class="sep"></div>
-    <div class="viewer" style="${data ? "font:inherit;white-space:normal" : ""}">${body}</div></div>`;
-  $("#rec-viewer .viewer").scrollTop = scroll || 0;
+    <div class="sep"></div>${summaryBlock}<div class="sep"></div>${speakersBlock}<div class="sep"></div>
+    <div class="viewer" id="rec-text" style="${data ? "font:inherit;white-space:normal" : ""}">${body}</div></div>`;
+  $("#rec-text").scrollTop = scroll || 0;
+  $("#sum-copy")?.addEventListener("click", () => copy(summary));
+  $("#sum-run")?.addEventListener("click", async () => renderRecordings(await md.call("summary_run", { stem })));
 
   $("#rec-close").onclick = closeRecording;
   $("#rec-copy").onclick = async () => copy(await md.call("recording_text", { stem }));

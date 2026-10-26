@@ -57,7 +57,8 @@ class _Ticker(NSObject):
 class Overlay:
     """show(mode) / hide(), à appeler sur le thread principal. level() renvoie le niveau du micro (0..1)."""
 
-    TEXTS = {"ecoute": "J'écoute…", "mainslibres": "Mains libres", "transcription": "Transcription…"}
+    TEXTS = {"ecoute": "J'écoute…", "mainslibres": "Mains libres", "transcription": "Transcription…",
+             "reecriture": "Mise en forme…"}
 
     def __init__(self, level):
         self.level = level
@@ -118,14 +119,16 @@ class Overlay:
             self._place()
         self.mode = mode
         self.label.setStringValue_(self.TEXTS[mode])
-        color = NSColor.systemOrangeColor() if mode == "transcription" else NSColor.systemRedColor()
+        working = mode in ("transcription", "reecriture")
+        color = (NSColor.systemPurpleColor() if mode == "reecriture" else NSColor.systemOrangeColor()) if working \
+            else NSColor.systemRedColor()
         self.dot.layer().setBackgroundColor_(color.CGColor())
-        self.meter.setHidden_(mode == "transcription")
+        self.meter.setHidden_(working)
         self.panel.orderFrontRegardless()
-        if self.timer is None and mode != "transcription":
+        if self.timer is None and not working:
             self.timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
                 1 / 20, self._ticker, "tick:", None, True)
-        elif mode == "transcription":
+        elif working:
             self._stop_timer()
 
     def hide(self):
