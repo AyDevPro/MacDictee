@@ -45,6 +45,13 @@ Une ligne « - » par tâche : qui, quoi, et l'échéance si elle a été dite (
 Questions restées ouvertes (ou « - Aucun »).
 Règles : n'invente rien qui ne soit pas dans la transcription ; garde les noms des intervenants tels qu'ils apparaissent ; si un passage est incompréhensible, ignore-le. Réponds uniquement par le compte rendu."""
 
+NOTES_SYSTEM = """Tu prends des notes sur un extrait d'une longue réunion (transcription automatique, en français).
+Écris des puces courtes : sujets abordés, chiffres, décisions prises, tâches (qui, quoi, échéance si dite), questions restées ouvertes.
+Garde les noms des intervenants tels qu'ils apparaissent. N'invente rien. Réponds uniquement par les notes."""
+
+# Au-delà, le compte rendu est fait par parties : une réunion de 2 h en une seule fois montait à 12 Go de mémoire.
+SUMMARY_CHUNK_TOKENS = 6000
+
 EXAMPLES = [
     ("euh bonjour Marc, bah je voulais savoir si t'as reçu le devis, enfin la facture je veux dire",
      "Bonjour Marc, je voulais savoir si tu as reçu la facture."),
@@ -207,9 +214,31 @@ class Rewriter:
         text = self.tokenizer.decode(out, skip_special_tokens=True).strip()
         return "\n".join(line.rstrip() for line in text.splitlines())  # Qwen finit parfois ses lignes par « ␣␣ »
 
-    def summarize(self, transcript: str) -> str:
-        """Compte rendu Markdown d'une réunion (transcription avec intervenants si disponible)."""
-        return self._generate([("system", SUMMARY_SYSTEM), ("user", transcript)], max_tokens=1500)
+    def summarize(self, transcript: str, progress=lambda f: None) -> str:
+        """Compte rendu Markdown d'une réunion (transcription avec intervenants si disponible).
+        Réunion longue : notes partie par partie, puis compte rendu à partir des notes (mémoire bornée)."""
+        import mlx.core as mx
+
+        self.load()
+        count = lambda text: len(self.tokenizer.encode(text, add_special_tokens=False).ids)
+        if count(transcript) <= SUMMARY_CHUNK_TOKENS * 1.3:
+            return self._generate([("system", SUMMARY_SYSTEM), ("user", transcript)], max_tokens=1500)
+        separator = "\n\n" if "\n\n" in transcript else "\n"  # tours de parole, sinon lignes horodatées
+        chunks, current = [], ""
+        for block in transcript.split(separator):
+            if current and count(current + block) > SUMMARY_CHUNK_TOKENS:
+                chunks.append(current)
+                current = ""
+            current += block + separator
+        chunks.append(current)
+        notes = []
+        for k, chunk in enumerate(chunks):
+            notes.append(f"### Partie {k + 1}/{len(chunks)}\n" +
+                         self._generate([("system", NOTES_SYSTEM), ("user", chunk)], max_tokens=700))
+            mx.clear_cache()
+            progress((k + 1) / (len(chunks) + 1))
+        intro = "Voici les notes prises sur les parties successives d'une longue réunion.\n\n"
+        return self._generate([("system", SUMMARY_SYSTEM), ("user", intro + "\n\n".join(notes))], max_tokens=1500)
 
     def clean(self, raw: str):
         """(texte, réécrit ?) : la réécriture si elle passe le garde-fou, sinon la transcription."""

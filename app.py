@@ -703,6 +703,14 @@ RECORDING_STEM = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}h\d{2}$")
 
 
 SUMMARIZING = set()  # réunions dont le compte rendu est en cours de rédaction
+_durations = {}  # (chemin, date de modif) -> durée : afinfo coûte ~20 ms par M4A
+
+
+def _duration(path: Path) -> float:
+    key = (str(path), path.stat().st_mtime)
+    if key not in _durations:
+        _durations[key] = speakers.duration(path)
+    return _durations[key]
 
 
 def summary_path(txt: Path) -> Path:
@@ -730,19 +738,19 @@ def list_recordings(diarizing=None):
     for txt in sorted(OUT_DIR.glob("*.txt"), reverse=True):
         if not RECORDING_STEM.match(txt.stem):
             continue
-        wav = txt.with_suffix(".wav")
+        audio = speakers.audio_path(txt)
         speakers_json, speakers_txt = speakers.paths(txt)
         lines = [l for l in txt.read_text(encoding="utf-8").splitlines()[2:] if l.strip()]
         out.append({
             "stem": txt.stem,
             "txt": str(txt),
-            "wav": str(wav) if wav.exists() else None,
+            "wav": str(audio) if audio else None,  # WAV pendant/juste après la réunion, puis M4A compressé
             "speakers_txt": str(speakers_txt) if speakers_json.exists() else None,
             "summary": str(summary_path(txt)) if summary_path(txt).exists() else None,
             "summarizing": txt.stem in SUMMARIZING,
-            "system": speakers.system_path(txt).exists(),
+            "system": speakers.system_audio_path(txt) is not None,
             "diarizing": diarizing.get(txt.stem),
-            "duration": max(0, wav.stat().st_size - 44) / (2 * SR) if wav.exists() else None,
+            "duration": _duration(audio) if audio else None,
             "lines": len(lines),
             "preview": re.sub(r"^\[[\d:]+\]\s*", "", lines[0])[:160] if lines else "",
         })
@@ -962,7 +970,8 @@ class App(rumps.App):
             txt = recording_txt(args["stem"])
             if (self.long and self.long.txt_path == txt) or args["stem"] in self.diarizing:
                 raise ValueError("Cette réunion est en cours de traitement")
-            files = [txt.with_suffix(".wav"), speakers.system_path(txt)]
+            system = speakers.system_path(txt)
+            files = [txt.with_suffix(".wav"), txt.with_suffix(".m4a"), system, system.with_suffix(".m4a")]
             if args["what"] == "all":
                 files += [txt, *speakers.paths(txt), speakers.words_path(txt), summary_path(txt),
                           txt.with_name(txt.stem + "_locuteurs.txt")]
@@ -1279,16 +1288,26 @@ class App(rumps.App):
             self.set_status("pret")
             self.window.emit("recordings", list_recordings(self.diarizing))
         if SETTINGS["speakers"] and rec.segments:
-            self.run_speakers(rec.txt_path)
+            self.run_speakers(rec.txt_path)  # compresse l'audio une fois les intervenants séparés
         else:
+            self.compress_audio(rec.txt_path)
             notify("MacDictée", "Transcription terminée", rec.txt_path.name)
+
+    def compress_audio(self, txt):
+        """WAV -> M4A (~30 Mo pour 2 h au lieu de 230) une fois la réunion traitée."""
+        try:
+            for wav in (txt.with_suffix(".wav"), speakers.system_path(txt)):
+                speakers.compress(wav)
+        except Exception as e:  # on garde alors le WAV : rien n'est perdu
+            notify("MacDictée", "Audio non compressé", str(e)[:200])
+        self.window.emit("recordings", list_recordings(self.diarizing))
 
     # --- intervenants
     def run_speakers(self, txt, count=None):
         stem = txt.stem
         if stem in self.diarizing:
             return
-        if not txt.with_suffix(".wav").exists():
+        if speakers.audio_path(txt) is None:
             raise ValueError("L'audio de cette réunion a été supprimé")
         self.diarizing[stem] = 0.0
         threading.Thread(target=self._speakers_worker, args=(txt, count), daemon=True).start()
@@ -1343,14 +1362,14 @@ class App(rumps.App):
                 self.window.emit("speakers_progress", {"stem": stem, "progress": fraction})
 
         try:
-            data = speakers.run(txt, txt.with_suffix(".wav"), count, progress, fix_text=apply_rules,
+            data = speakers.run(txt, speakers.audio_path(txt), count, progress, fix_text=apply_rules,
                                 transcribe_words=lambda audio: transcribe(audio, words=True)["segments"])
             notify("MacDictée", "Réunion prête", f"{len(data['names'])} intervenant(s) identifié(s) : renommez-les dans MacDictée.")
         except Exception as e:
             notify("MacDictée", "Intervenants non identifiés", str(e)[:200])
         finally:
             self.diarizing.pop(stem, None)
-            self.window.emit("recordings", list_recordings(self.diarizing))
+            self.compress_audio(txt)  # rien à faire si l'audio est déjà compressé
             self.window.emit("speakers_done", {"stem": stem})
 
 

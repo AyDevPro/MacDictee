@@ -12,6 +12,11 @@ Tout le code a été rédigé depuis un environnement Linux. Seuls la syntaxe et
 - **`whisper_lite.py`** : DTW et filtre médian en numpy à la place de numba/llvmlite/scipy (horodatages de mots identiques sur la vraie réunion, 152/152) -> app 572 -> 369 Mo, DMG 288 -> 171 Mo, pas de LLVM en mémoire.
 - La fenêtre ne recalcule l'état que si elle est visible (`push_state`), rafraîchie à l'ouverture.
 
+## Longues réunions (0.9.1, mesuré sur M4 16 Go)
+- Audio compressé en AAC 32 kb/s (`afconvert`, fourni par macOS) une fois les intervenants séparés : 2 h = ~30 Mo par piste au lieu de 230 Mo (÷ 9,9 mesuré), WAV supprimé seulement si la durée du M4A concorde. `load_wav` relit les M4A (décodage afconvert) ; séparation des intervenants identique après compression.
+- Séparation des intervenants : 30 min en 118 s (1,6 Go) -> ~8 min pour 2 h.
+- Compte rendu : au-delà de ~6 000 jetons, notes partie par partie puis synthèse (`SUMMARY_CHUNK_TOKENS`). 2 h (18 000 mots, 35 000 jetons) : 217 s et 4,6 Go, contre 350 s et 12,2 Go d'un seul tenant.
+
 ## Distribution
 - `./build.sh` : app autonome py2app (Python 3.12 + dépendances embarquées, ~570 Mo, DMG ~270 Mo) -> `dist/`. Signature ad hoc par défaut ; Developer ID + notarisation si `SIGN_ID` / `NOTARY_PROFILE` (chemin écrit mais jamais testé, pas de compte développeur pour l'instant).
 - Pièges py2app réglés dans `setup.py` / `build.sh` : limite de récursion, `mlx` et `tiktoken_ext` sont des namespace packages copiés après coup, torch/sympy exclus (jamais chargés pour transcrire), noms de fichiers ASCII (`MacDictee.app`, codesign casse sur le « é ») et nom affiché via `CFBundleDisplayName`.
@@ -50,7 +55,7 @@ Objectif : comme le Notetaker de Wispr Flow (sans bot dans l'appel). Aujourd'hui
 - Plan B plus simple : BlackHole + périphérique audio multiple (à documenter).
 
 ## Autres pistes (par priorité)
-1. Corriger le WAV en cas de plantage (l'en-tête n'est finalisé qu'à la fermeture : réparer avec ffmpeg ou mettre à jour l'en-tête périodiquement).
+1. ~~WAV en cas de plantage~~ : faux problème (le module wave de Python met l'en-tête à jour à chaque writeframes, vérifié) ; `load_wav` lit de toute façon toutes les données après l'en-tête de 44 octets.
 2. Tests automatisés pour `learn_from_edit`, `apply_rules`, la logique de découpage sur silence (ceux de `formatting.py` existent, dans `tests/`).
 3. Raccourci configurable (aujourd'hui Option droite codée en dur), réglages persistants (langue, modèle, collage auto) au lieu de variables d'environnement.
 4. Résumé/compte rendu : fait en local (0.9.0). Ne PAS passer par une API cloud : l'engagement auprès de l'utilisateur est qu'aucun mot ne quitte le Mac.

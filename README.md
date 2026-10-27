@@ -69,7 +69,7 @@ La fenêtre *Ouvrir MacDictée…* (menu 🎙) montre l'état des autorisations,
 **Compte rendu avec Claude** : à la fin d'une réunion, glissez le fichier `~/Transcriptions/..._intervenants.txt` (ou `...txt`) dans Claude et demandez un compte rendu. Le bouton *Copier le texte* de la fenêtre copie la version avec les intervenants.
 
 **Enregistrement long (réunions, conversations)** : menu 🎙 > *Démarrer l'enregistrement long*.
-- L'audio est sauvegardé en continu, donc aucune limite de durée.
+- L'audio est sauvegardé en continu, donc aucune limite de durée. Une fois la réunion traitée, il est compressé : environ 30 Mo pour 2 heures (60 Mo en visio, avec la piste du son du Mac).
 - La transcription se construit au fil de l'eau dans `~/Transcriptions/AAAA-MM-JJ_HHhMM.txt`, avec des horodatages. Les blocs sont coupés sur les silences pour ne pas couper les phrases.
 - À l'arrêt, les intervenants sont séparés automatiquement (« Intervenant 1, 2, 3… », réglage désactivable) : renommez-les dans la fenêtre, onglet Réunions. Si le nombre détecté est faux, relancez en indiquant le nombre de personnes. Fichiers : `..._intervenants.txt` (lisible) et `..._intervenants.json`. Les modèles (~35 Mo, sherpa-onnx) se téléchargent la première fois dans `~/Library/Application Support/MacDictee/modeles`.
 - Onglet Réunions : *Supprimer l'audio* (garde le texte, utile une fois le résumé fait) ou *Supprimer la réunion* (audio + textes). Les fichiers vont à la Corbeille.

@@ -15,6 +15,7 @@ Une seule voix dans la salle : « Moi » ; plusieurs (réunion hybride) : « Sur
 import json
 import os
 import re
+import subprocess
 import tarfile
 import tempfile
 import wave
@@ -48,8 +49,64 @@ def ensure_models(progress=lambda f: None):
 
 
 def load_wav(path) -> np.ndarray:
-    with wave.open(str(path)) as w:
-        return np.frombuffer(w.readframes(w.getnframes()), dtype="int16").astype("float32") / 32768.0
+    """WAV ou M4A (réunion compressée) -> float32 16 kHz mono.
+    Nos WAV ont un en-tête de 44 octets : on lit toutes les données après, même si l'en-tête n'a pas été finalisé
+    (app quittée brutalement pendant une réunion)."""
+    path = Path(path)
+    if path.suffix == ".m4a":
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "audio.wav"
+            subprocess.run(["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(path), str(out)],
+                           check=True, capture_output=True)
+            return load_wav(out)
+    with open(path, "rb") as f:
+        header = f.read(44)
+    if header[:4] == b"RIFF" and header[36:40] == b"data":
+        data = np.fromfile(path, dtype="<i2", offset=44)
+    else:
+        with wave.open(str(path)) as w:
+            data = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
+    return data.astype("float32") / 32768.0
+
+
+# ---------------------------------------------------------------------- fichiers audio d'une réunion
+# Pendant la réunion : WAV (écrit en continu). Ensuite : AAC 32 kb/s (~30 Mo pour 2 h au lieu de 230), via afconvert,
+# fourni par macOS. Séparation des intervenants vérifiée identique après compression.
+COMPRESSED_BITRATE = 32000
+
+
+def audio_path(txt_path: Path):
+    """Audio de la réunion (micro + son du Mac) : WAV tant qu'il n'est pas compressé, sinon M4A, ou None."""
+    wav = txt_path.with_suffix(".wav")
+    return wav if wav.exists() else (wav.with_suffix(".m4a") if wav.with_suffix(".m4a").exists() else None)
+
+
+def system_audio_path(txt_path: Path):
+    wav = system_path(txt_path)
+    return wav if wav.exists() else (wav.with_suffix(".m4a") if wav.with_suffix(".m4a").exists() else None)
+
+
+def duration(path: Path) -> float:
+    if path.suffix == ".wav":
+        return max(0, path.stat().st_size - 44) / (2 * SR)
+    out = subprocess.run(["afinfo", str(path)], capture_output=True, text=True).stdout
+    m = re.search(r"estimated duration: ([\d.]+)", out)
+    return float(m[1]) if m else 0.0
+
+
+def compress(wav: Path):
+    """WAV -> M4A ; le WAV n'est supprimé que si le M4A a bien la même durée. Renvoie le M4A ou None."""
+    if not wav.exists():
+        return None
+    m4a = wav.with_suffix(".m4a")
+    expected = duration(wav)
+    subprocess.run(["afconvert", "-f", "m4af", "-d", "aac", "-b", str(COMPRESSED_BITRATE), "-q", "127",
+                    str(wav), str(m4a)], check=True, capture_output=True)
+    if abs(duration(m4a) - expected) > 2:
+        m4a.unlink(missing_ok=True)
+        return None
+    wav.unlink()
+    return m4a
 
 
 def diarize(audio: np.ndarray, num_speakers=None, progress=lambda f: None):
@@ -294,8 +351,8 @@ def run(txt_path: Path, wav_path: Path, num_speakers=None, progress=lambda f: No
     ensure_models(lambda f: progress(0.1 * f))
     audio = load_wav(wav_path)
     diar_progress = lambda f: progress(0.1 + 0.8 * f)
-    if system_path(txt_path).exists():  # visio : la salle et la visio, chacune sur sa piste
-        system = load_wav(system_path(txt_path))
+    if system_audio_path(txt_path):  # visio : la salle et la visio, chacune sur sa piste
+        system = load_wav(system_audio_path(txt_path))
         n = min(len(audio), len(system))
         mic = audio[:n] - system[:n]  # le fichier principal est exactement micro + son du Mac
         active = _active(system)
